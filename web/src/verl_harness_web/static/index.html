@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>verl-harness · live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css" />
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/markdown/markdown.js"></script>
+<link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+
+<div class="scanlines" aria-hidden="true"></div>
+<div class="grid-bg" aria-hidden="true"></div>
+
+<header class="appbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">◢◤</span>
+    <div class="brand-text">
+      <span class="brand-name">verl-harness</span>
+      <span class="brand-sub">training control</span>
+    </div>
+  </div>
+  <div class="harness-id">
+    <span class="harness-title" id="harness-title">Loading…</span>
+    <span class="harness-sub" id="harness-sub"></span>
+  </div>
+  <div class="appbar-right">
+    <span class="run-badge" id="run-badge" data-status="idle">
+      <span class="run-dot"></span>
+      <span class="run-label">idle</span>
+    </span>
+    <span class="mode-chip" id="mode-chip">live</span>
+    <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme">☼</button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ============================== LEFT COLUMN ============================== -->
+  <section class="col col-left">
+    <div class="card card-graph" id="card-graph">
+      <div class="card-head">
+        <h2><span class="head-tag">[01]</span> Workflow</h2>
+        <span class="card-hint">Tap a state to inspect</span>
+      </div>
+      <div class="card-body graph-body" id="graph-wrap">
+        <div id="graph"></div>
+      </div>
+      <div class="zoom-ctl">
+        <button class="zoom-btn" id="zoom-out" aria-label="Zoom out">−</button>
+        <span class="zoom-level" id="zoom-level" title="Reset">100%</span>
+        <button class="zoom-btn" id="zoom-in" aria-label="Zoom in">+</button>
+      </div>
+    </div>
+
+    <div class="card card-skills" id="card-skills">
+      <div class="card-head">
+        <h2><span class="head-tag">[02]</span> Skills</h2>
+        <span class="card-hint" id="skills-hint"></span>
+      </div>
+      <div class="card-body" id="skills-tree"></div>
+    </div>
+  </section>
+
+  <!-- ============================== RIGHT COLUMN ============================== -->
+  <section class="col col-right">
+
+    <!-- Top — context-aware: training panels when a run is active and we're past launch_training -->
+    <div class="card card-context" id="card-context">
+      <div class="card-head">
+        <h2><span class="head-tag" id="ctx-tag">[03]</span> <span id="ctx-title">Inspector</span></h2>
+        <div class="detail-actions">
+          <span class="save-status" id="save-status"></span>
+          <button class="ghost-btn" id="cancel-btn" hidden>Cancel</button>
+          <button class="primary-btn" id="save-btn" hidden>Save</button>
+          <button class="ghost-btn" id="edit-btn" hidden>
+            <span aria-hidden="true">✎</span> Edit
+          </button>
+        </div>
+      </div>
+      <div class="card-body" id="context-body">
+        <div class="markdown" id="rendered">
+          <p class="empty-hint">Pick a state, skill, or the workflow overview on the left.</p>
+        </div>
+        <div id="editor-host" hidden></div>
+      </div>
+    </div>
+
+    <!-- Live training panels — visible whenever a run exists, even if idle -->
+    <div class="training-panels" id="training-panels" hidden>
+      <div class="card card-job" id="card-job">
+        <div class="card-head">
+          <h2><span class="head-tag">[04]</span> Job</h2>
+          <span class="card-hint" id="job-hint"></span>
+        </div>
+        <div class="card-body job-body" id="job-body">
+          <div class="empty-hint">No job info yet.</div>
+        </div>
+      </div>
+
+      <div class="card card-progress" id="card-progress">
+        <div class="card-head">
+          <h2><span class="head-tag">[05]</span> Progress</h2>
+          <span class="card-hint" id="progress-hint">loss · reward · kl</span>
+        </div>
+        <div class="card-body chart-body">
+          <canvas id="chart-progress"></canvas>
+          <div class="empty-hint" id="progress-empty" hidden>No progress.csv yet — training has not started.</div>
+        </div>
+      </div>
+
+      <div class="card card-anomalies" id="card-anomalies">
+        <div class="card-head">
+          <h2><span class="head-tag">[06]</span> Anomalies</h2>
+          <span class="card-hint" id="anomalies-hint"></span>
+        </div>
+        <div class="card-body anomalies-body" id="anomalies-body">
+          <div class="empty-hint">No anomalies detected.</div>
+        </div>
+      </div>
+
+      <div class="card card-logs" id="card-logs">
+        <div class="card-head">
+          <h2><span class="head-tag">[07]</span> Log tail</h2>
+          <span class="card-hint" id="logs-hint">workspace/logs/job_log.md</span>
+        </div>
+        <div class="card-body logs-body">
+          <pre id="log-tail" class="log-tail"></pre>
+        </div>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<div class="toast" id="toast" hidden></div>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

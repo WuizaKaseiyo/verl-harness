@@ -1,10 +1,12 @@
 # verl-harness
 
-A [FastHarness](https://github.com/nickhezy/FastHarness)-compatible harness that drives an agent through the full lifecycle of a [verl](https://github.com/volcengine/verl) training run: parse the user's intent, find the right recipe in the verl checkout, prepare the dataset (verl's preprocess scripts for known datasets; auto-generated for HuggingFace datasets that aren't in the registry), pick a compute target (local GPU, local Slurm login node, or remote Slurm via ssh), provision the env, launch the job, monitor it, and produce a run report.
+A markdown-driven agent harness that drives an LLM agent through the full lifecycle of a [verl](https://github.com/volcengine/verl) training run: parse the user's intent, find the right recipe in the verl checkout, prepare the dataset (verl's preprocess scripts for known datasets; auto-generated for HuggingFace datasets that aren't in the registry), pick a compute target (local GPU, local Slurm login node, or remote Slurm via ssh), provision the env, launch the job, monitor it, and produce a run report.
 
-This is a **Category B** harness — a workflow demo that produces a concrete output (a trained checkpoint + a structured run report). It does not optimise verl itself; it drives it.
+The harness is a workflow that produces a concrete output (a trained checkpoint + a structured run report). It does not optimise verl itself; it drives it.
 
 ## What it does
+
+The harness is a finite state machine specified entirely in markdown — every state under `states/` and every skill under `skills/` is a runtime instruction file the agent reads and executes. There is no executable code in this repo; the agent is the runtime.
 
 - **One agent session** walks the FSM from `intake` to `finalize`.
 - **No registry of trainers.** The user names the algorithm (`ppo`, `grpo`, `gspo`, `sft`, …); the harness goes looking for a matching script under the verl checkout's `examples/<algo>_trainer/` or `recipe/<algo>_trainer/`, or falls back to a direct `python -m verl.trainer.main_<algo>` command. If the user names a trainer verl doesn't have, the harness halts honestly.
@@ -56,11 +58,7 @@ verl-harness/
 
 ## How to invoke
 
-From any FastHarness-compatible host, invoke the FastHarness `run-harness` skill on this folder:
-
-```
-run-harness /Users/steven/verl-harness
-```
+Point an agent runner at this directory and have it start at `states/intake.md`. The agent walks the FSM as specified — at each state it reads the state file, applies the listed skills, executes the described work, writes the named deliverables under `runs/<run_id>/workspace/`, and transitions per the `## Next States` rules.
 
 The harness asks for `verl_root` (or reads `$VERL_HOME`), the algorithm, the model, the dataset, and the compute preference. From there it pauses at HITL checkpoints for confirmation — recipe selection (when multiple match), prepared-data confirmation, compute-target confirmation, and the cost gate before launching the actual training job. `--no-hitl` skips all pauses; the harness records the escape in the run log.
 
