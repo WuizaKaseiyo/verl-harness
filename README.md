@@ -31,6 +31,7 @@ See `task-overview.md` for the full diagram and the parsing conventions.
 ```
 verl-harness/
 ├── task-overview.md
+├── CLAUDE.md               — repo guidance for Claude Code (and other agents)
 ├── states/
 │   ├── intake.md
 │   ├── locate_recipe.md
@@ -53,7 +54,8 @@ verl-harness/
 │   ├── compute_ssh_slurm/  — ssh-slurm provisioning, launch, monitoring
 │   ├── training_monitor/   — polling cadences, terminal conditions, anomaly patterns, progress parsing
 │   └── global/             — honesty principle, scope discipline, defaults
-└── runs/                   — per-execution workspace dirs (gitignored)
+├── runs/                   — per-execution workspace dirs (gitignored)
+└── web/                    — sibling Python package: `verl-harness-web` live dashboard
 ```
 
 ## How to invoke
@@ -61,6 +63,16 @@ verl-harness/
 Point an agent runner at this directory and have it start at `states/intake.md`. The agent walks the FSM as specified — at each state it reads the state file, applies the listed skills, executes the described work, writes the named deliverables under `runs/<run_id>/workspace/`, and transitions per the `## Next States` rules.
 
 The harness asks for `verl_root` (or reads `$VERL_HOME`), the algorithm, the model, the dataset, and the compute preference. From there it pauses at HITL checkpoints for confirmation — recipe selection (when multiple match), prepared-data confirmation, compute-target confirmation, and the cost gate before launching the actual training job. `--no-hitl` skips all pauses; the harness records the escape in the run log.
+
+## Dashboard
+
+A sibling Python package at `web/` ships a live dashboard, `verl-harness-web`, that watches a harness folder and renders the FSM graph, the active state, the selected recipe / prepared dataset / compute target, and (once training is running) the progress chart, anomalies list, job card, and incremental log tail.
+
+```bash
+uv run --project web verl-harness-web .
+```
+
+Defaults to `http://127.0.0.1:8766`. The dashboard is **observe-only** — it does not execute the harness; it watches the workspace directory and renders what's on disk. The only writes it permits are to `task-overview.md`, `states/*.md`, and `skills/**/*.md`. See `web/README.md` for endpoints, modes (`live` / `--static`), and design notes.
 
 ## Required capabilities
 
