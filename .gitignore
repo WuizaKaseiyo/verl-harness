@@ -1,0 +1,17 @@
+# Runs are per-execution scratch — never committed.
+runs/*
+!runs/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
