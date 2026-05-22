@@ -6,6 +6,16 @@ Watch the running training job until it reaches a terminal status: success (trai
 
 Apply the `training_monitor` skill (`skills/training_monitor`) for the polling rules, log-anomaly detection, and terminal-condition definitions, plus whichever of `compute_local` / `compute_slurm` / `compute_ssh_slurm` matches the chosen target (for the *mechanism* of polling).
 
+**Workspace is the source of truth.** This state's poll loop can run for many hours; the runner's conversation context may be auto-compressed mid-loop. Any reference to earlier decisions — algorithm, recipe path, slurm jobid, output_dir, model path — must be re-read from the workspace on each iteration:
+
+- `workspace/intake/training_intent.md` for the user's intent
+- `workspace/recipe/recipe.md` for the launch arguments
+- `workspace/compute/compute_choice.md` for the target + slurm directives
+- `workspace/job/job_info.md` for `slurm_jobid`, `pid`, log paths
+- `workspace/logs/state_log.md` for the FSM history
+
+Do not rely on agent memory of the upstream states. Two consecutive polls may be answered by two different context-window states of the same runner.
+
 Concretely, each iteration:
 
 1. **Read** `workspace/job/job_info.md`.

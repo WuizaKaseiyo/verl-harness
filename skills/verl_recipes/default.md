@@ -118,7 +118,26 @@ When no shell-script recipe matches, construct the launch command from the appro
 ## Launch path
 - type: script | module
 - script_path: /opt/verl/examples/grpo_trainer/run_qwen3_4b_fsdp.sh   # if type=script
-- module: verl.trainer.main_grpo                                      # if type=module
+- module: verl.trainer.main_ppo                                       # if type=module (all PPO-family RL algorithms)
+
+## Key hyperparameters
+
+These are surfaced in the locate_recipe HITL display. The user may override any of them before recipe.md is finalised.
+
+| Field | Recipe default | User override |
+|---|---|---|
+| actor_rollout_ref.actor.optim.lr | 1e-6 | — |
+| critic.optim.lr | 1e-5 | — (n/a unless PPO) |
+| actor_rollout_ref.actor.kl_loss_coef | 0.001 | — |
+| actor_rollout_ref.actor.ppo_mini_batch_size | 16 | — |
+| actor_rollout_ref.rollout.gpu_memory_utilization | 0.6 | — |
+| actor_rollout_ref.rollout.tensor_model_parallel_size | 1 | — |
+| actor_rollout_ref.rollout.n | 8 | — |
+| data.max_response_length | 1024 | — |
+| trainer.total_epochs | 1 | — |
+| trainer.total_training_steps | (unset — runs to epochs end) | — |
+| trainer.test_freq | 2 | — |
+| trainer.save_freq | 10 | — |
 
 ## Resolved arguments
 

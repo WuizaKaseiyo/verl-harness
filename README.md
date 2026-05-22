@@ -17,11 +17,15 @@ The harness is a finite state machine specified entirely in markdown — every s
 ## FSM diagram
 
 ```
-intake → locate_recipe → prepare_data ⇄ generate_preprocess
-                                        ↓
-                            select_compute → provision_env → launch_training → monitor_training → summarize → finalize
-                                                                                                                   ↑
-                                                          (provision_env failure / launch_training failure short-circuit here)
+intake → locate_recipe → configure_algorithm → prepare_data ⇄ generate_preprocess
+                                                              ↓
+                            configure_reward → select_compute → provision_env → sanity_rollout → launch_training → monitor_training → summarize → finalize
+                                                                                        ↓                                                              ↑
+                                                                                        ├─ sanity_failed ─────────────────────────────────────────────┤
+                                                                                        │                                                              │
+                                  (configure_algorithm halt: dpo/rm with no first-class trainer also exits here)                                       │
+                                                                                                                                                       │
+                                                          (provision_env failure / launch_training failure short-circuit here too)
 ```
 
 See `task-overview.md` for the full diagram and the parsing conventions.
@@ -35,8 +39,11 @@ verl-harness/
 ├── states/
 │   ├── intake.md
 │   ├── locate_recipe.md
+│   ├── configure_algorithm.md       — Phase 2: apply algo_<name> skill, surface algo knobs
 │   ├── prepare_data.md
 │   ├── generate_preprocess.md
+│   ├── configure_reward.md          — Phase 1: pick reward_kind (rule/model/custom/shaped)
+│   ├── sanity_rollout.md            — Phase 1: load model, run 1 prompt, run reward fn
 │   ├── select_compute.md
 │   ├── provision_env.md
 │   ├── launch_training.md
@@ -53,7 +60,18 @@ verl-harness/
 │   ├── compute_slurm/      — local-slurm provisioning, launch, monitoring
 │   ├── compute_ssh_slurm/  — ssh-slurm provisioning, launch, monitoring
 │   ├── training_monitor/   — polling cadences, terminal conditions, anomaly patterns, progress parsing
-│   └── global/             — honesty principle, scope discipline, defaults
+│   ├── reward_rule/        — built-in deterministic rewards (Phase 1)
+│   ├── reward_model/       — pre-trained reward-model scoring (Phase 1)
+│   ├── reward_custom/      — author a custom_reward_function.path file (Phase 1)
+│   ├── reward_shaping/     — composing format + correctness + length rewards (Phase 1)
+│   ├── algo_ppo/           — PPO-only knobs (critic, value_loss, kl_ctrl) (Phase 2)
+│   ├── algo_grpo/          — GRPO group-rollout knobs (n, norm_adv_by_std) (Phase 2)
+│   ├── algo_dpo/           — DPO handling (note: not first-class in verl) (Phase 2)
+│   ├── algo_sft/           — SFT knobs (packing, chat template, dynamic batch) (Phase 2)
+│   ├── algo_rm/            — RM training (note: not first-class in verl) (Phase 2)
+│   ├── algo_distill/       — on-policy distillation (teacher + distill loss) (Phase 2)
+│   ├── builtin-tools/      — FastHarness filesystem/shell/web tools (used by every state)
+│   └── global/             — honesty principle, scope discipline, defaults, state-log contract
 ├── runs/                   — per-execution workspace dirs (gitignored)
 └── web/                    — sibling Python package: `verl-harness-web` live dashboard
 ```
@@ -62,7 +80,63 @@ verl-harness/
 
 Point an agent runner at this directory and have it start at `states/intake.md`. The agent walks the FSM as specified — at each state it reads the state file, applies the listed skills, executes the described work, writes the named deliverables under `runs/<run_id>/workspace/`, and transitions per the `## Next States` rules.
 
-The harness asks for `verl_root` (or reads `$VERL_HOME`), the algorithm, the model, the dataset, and the compute preference. From there it pauses at HITL checkpoints for confirmation — recipe selection (when multiple match), prepared-data confirmation, compute-target confirmation, and the cost gate before launching the actual training job. `--no-hitl` skips all pauses; the harness records the escape in the run log.
+The harness asks for `verl_root` (or reads `$VERL_HOME`), the algorithm, the model, the dataset, the reward kind, and the compute preference. From there it pauses at hand-off points for confirmation — recipe selection (when multiple match), prepared-data confirmation (with row-0 sample), compute-target confirmation, provisioning result, and the cost gate before launching the actual training job.
+
+**HITL mode semantics:**
+- **HITL on (default):** every documented hand-off point pauses.
+- **`--no-hitl`:** **semi-autonomous, not fully autonomous.** Most pauses pass silently, but **four always-on hand-off points still block** — `generate_preprocess` script approval, `configure_reward` approval for custom/shaped reward, `sanity_rollout` report approval, and the cost gate when estimated node-hours ≥ `cost_gate_threshold_node_hours` (default 50). See `skills/global/scientific_principles.md` → "Mode semantics" for the four conditions to pre-flight if you want lights-out operation.
+
+### Running with Claude Code
+
+The harness is designed to be driven by [Claude Code](https://claude.com/claude-code) (or any compatible agent runner). A minimal starting prompt:
+
+```
+You are driving the verl-harness FSM at /path/to/verl-harness.
+
+1. Read CLAUDE.md, task-overview.md, and skills/global/scientific_principles.md.
+2. Read states/intake.md and apply it.
+3. After each state's work is complete, read the named state file for its
+   `## Next States` block and evaluate which transition condition holds.
+4. Append one line to runs/<run_id>/workspace/logs/state_log.md on every
+   state entry (format: `- [<ISO8601 UTC>] #<step> entered <state>, from <prev>`).
+5. Honor every hand-off point per the state's `## Hand-off Points` block.
+
+My intent: <one sentence — e.g., "GRPO on gsm8k with Qwen3-4B on agent-dev partition">.
+
+verl checkout: <absolute path or $VERL_HOME>.
+HITL: on (or `--no-hitl` for autonomous mode).
+```
+
+The agent owns the FSM transition logic. The harness does not ship a runner; it ships the spec the runner follows.
+
+### Re-attaching to a running job
+
+If your Claude Code session disconnects mid-`monitor_training` (SSH drop, container restart, conversation auto-compression), start a new session and prompt:
+
+```
+The harness at /path/to/verl-harness has an in-flight run.
+1. Read runs/<latest_run_id>/meta.json to confirm status: "running".
+2. Read runs/<latest_run_id>/workspace/logs/state_log.md to recover the last
+   state entered. If it's `monitor_training`, re-enter it.
+3. Read workspace/job/job_info.md for the slurm_jobid / pid and resume polling.
+```
+
+The monitor state explicitly re-reads all upstream decisions from `workspace/` on every poll (see `states/monitor_training.md`), so it is safe to re-attach. Do **not** rely on agent memory from the previous session.
+
+## Running on a cloud Slurm cluster
+
+Cloud-hosted Slurm clusters (cluster login node on a remote host, GPUs behind a partition) introduce a few operational concerns the local-laptop case does not:
+
+- **Wrap your Claude Code session in `tmux` / `screen`.** If your SSH connection drops, the session keeps polling. Re-attach with `tmux a -t verl-harness`.
+- **Point `$HF_HOME` and `$OUTPUT_DIR` at scratch, not $HOME.** Most cloud clusters have a small `$HOME` quota and a large `$SCRATCH` (or shared filesystem) tier. Set in your shell profile:
+  ```bash
+  export SCRATCH=${SCRATCH:-/mnt/scratch/$USER}            # cluster-specific
+  export HF_HOME=$SCRATCH/.cache/huggingface
+  ```
+  The harness's `provision_env` will warn if either resolves under `$HOME`.
+- **Container detection.** If the cluster's verl install uses Apptainer/Singularity (common on shared HPC), the harness's `compute_slurm` skill grep's `examples/tutorial/slurm/ray_on_slurm.slurm` for `apptainer run` and preserves the container wrap. If you have a Conda env that already has verl + torch + vllm, declare `container: none` in `compute_choice.md` to drop the wrap.
+- **Where slurm fields come from.** `slurm.partition`, `slurm.account`, `slurm.time_limit` are *not* in the recipe — they are intake fields you supply. `sinfo --format='%P %a %l'` lists the partitions you can pick from.
+- **Cost gate.** Even under `--no-hitl`, the launch_training cost gate fires when estimated node-hours ≥ 50 (configurable via `cost_gate_threshold_node_hours` in `training_intent.md`). This is a safety rail against silent autonomous spend.
 
 ## Dashboard
 

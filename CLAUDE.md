@@ -22,7 +22,7 @@ intake → locate_recipe → prepare_data ⇄ generate_preprocess
 
 Two kinds of files:
 
-- **`states/<name>.md`** — one per FSM node. Each follows a strict schema the agent depends on: `## Description` (what to do, which skills to apply) → `## Skills` (which skill dirs to read) → `## Human Checkpoints` (HITL pause points) → `## Next States` (each transition has a `**Condition:**` and `**Deliverables:**` block). Breaking this schema breaks the FSM.
+- **`states/<name>.md`** — one per FSM node. Each follows a strict schema the agent depends on: `## Description` (what to do, which skills to apply) → `## Skills` (which skill dirs to read) → `## Hand-off Points` (HITL pause points; the dashboard parser still accepts the older `## Human Checkpoints` for back-compat, but new states should use `## Hand-off Points`) → `## Next States` (each transition has a `**Condition:**` and `**Deliverables:**` block). Breaking this schema breaks the FSM.
 - **`skills/<area>/default.md`** — domain knowledge the states reference. Skills are *consulted*, not transitioned to. The `global/` skill (`scientific_principles.md`) is the only one that binds every state; the others are area-specific.
 
 The state files are the FSM; the skills are the library the FSM calls into. A state delegates non-trivial logic to a skill — e.g., `locate_recipe.md` explicitly defers candidate scoring to `skills/verl_recipes/`. When editing a state, check whether the detail belongs in the state (control flow, transitions, deliverables) or in the skill (rules, regexes, templates, tables).
@@ -61,12 +61,21 @@ These bind every state and override any specific instruction that conflicts:
 - **Honesty.** Never report a checkpoint that isn't on disk, a metric the trainer never logged, or a "success" verdict for a crashed run. Quote tool output verbatim — `squeue` lines, log lines, regex matches. If the trainer didn't print a reward, the summary says "reward not logged", not a guess.
 - **Read-only over verl.** The harness never modifies the verl source tree. Recipe behaviour is configured via env-var overrides or Hydra CLI overrides at launch time, never by patching `run_*.sh`.
 - **Cheap before expensive.** `provision_env` uses `sbatch --test-only` before submission; `launch_training` enforces a cost gate (estimated node-hours, presented to the user) before spending GPU time.
-- **HITL on by default.** Five checkpoints pause for confirmation: normalised intent (`intake`), recipe pick when multiple match (`locate_recipe`), prepared data (`prepare_data`), compute choice (`select_compute`), cost gate (`launch_training`). `--no-hitl` skips all five and records the escape in the run log.
+- **HITL on by default.** Seven hand-off points across the FSM pause for confirmation:
+  - normalised intent (`intake`)
+  - recipe pick when multiple match, OR direct-module fallback when none match (`locate_recipe`)
+  - approve generated preprocess script (`generate_preprocess`, when that branch fires)
+  - prepared data (`prepare_data`)
+  - compute target + slurm directives (`select_compute`)
+  - provisioning result (`provision_env`)
+  - cost gate before sbatch (`launch_training`)
+
+  `--no-hitl` skips all of them and records the escape in the run log.
 - **American English in all written artefacts.**
 
 ## Conventions when editing the specs
 
-- **Preserve the state-file schema.** Required H2 sections: `## Description`, `## Skills`, `## Human Checkpoints`, `## Next States`. Each `### <next-state>` under `## Next States` must have a `**Condition:**` and a `**Deliverables:**` block. Skip a section only when truly inapplicable (e.g., `finalize.md` has no `## Next States` — the comment in that file explains why).
+- **Preserve the state-file schema.** Required H2 sections: `## Description`, `## Skills`, `## Hand-off Points`, `## Next States`. (The dashboard parser at `web/src/verl_harness_web/parser.py` accepts the older `## Human Checkpoints` for back-compat, but new state files should use `## Hand-off Points`.) Each `### <next-state>` under `## Next States` must have a `**Condition:**` and a `**Deliverables:**` block. Skip a section only when truly inapplicable (e.g., `finalize.md` has no `## Next States` — the comment in that file explains why).
 - **Workspace paths are part of the contract.** `workspace/intake/training_intent.md` is referenced by name from multiple downstream states; renaming it requires updating every reader. Same for `recipe.md`, `dataset.md`, `compute_choice.md`, `job_info.md`, `job_status.md`.
 - **State vs skill placement.** Concrete rules, regex sets, tables of options, command templates → skill. Control flow, transition conditions, deliverables, HITL points → state. If a state file starts accumulating regexes or detail tables, that's the signal to move them into a skill.
 - **Polling cadences are minimums, not targets.** 30 s / 60 s / 90 s for local-direct / local-slurm / ssh-slurm. Don't propose faster polling — it spams `squeue` and annoys cluster admins.

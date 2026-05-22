@@ -28,12 +28,39 @@ Concretely:
   - Training-time log — `workspace/logs/job_log.md`
   - Progress CSV — `workspace/logs/progress.csv`
   - Anomalies — `workspace/logs/anomalies.md` (if any)
-  - Final checkpoint — `<output_dir>/checkpoints/...` (resolved path)
+  - Final checkpoint — `<output_dir>/checkpoints/global_step_<N>/` (resolved path)
+  - Best checkpoint — `<output_dir>/checkpoints/global_step_<best_N>/` (the one to hand downstream)
   - Final wandb run url — if configured
   - Recipe used — `workspace/recipe/recipe.md`
   - Prepared dataset — `workspace/dataset/dataset.md`
   - Job info — `workspace/job/job_info.md`
 - For crashed / preempted: the remediation or resume command from `summary.md`, hoisted to the top.
+
+#### Next steps
+
+The harness ends here, but the produced checkpoint is the input to several common downstream uses. Append the exact commands the user can run, using the best checkpoint path resolved above:
+
+```bash
+# Offline evaluation on a held-out dataset (or another known dataset)
+cd <VERL_ROOT>
+python -m verl.trainer.main_eval \
+  data.val_files=<path/to/eval.parquet> \
+  actor_rollout_ref.model.path=<best_path> \
+  trainer.n_gpus_per_node=<N> \
+  trainer.logger=["console"]
+
+# Launch a vllm-backed generation server (chat completion endpoint)
+python -m verl.trainer.main_generation_server \
+  actor_rollout_ref.model.path=<best_path> \
+  actor_rollout_ref.rollout.name=vllm \
+  actor_rollout_ref.rollout.tensor_model_parallel_size=<TP> \
+  actor_rollout_ref.rollout.gpu_memory_utilization=0.6
+
+# Convert FSDP shards to a single HF-safetensors directory (for hub upload / inference outside verl)
+# (Phase 3 — see roadmap §3 "convert" track for the supported flow once that track lands.)
+```
+
+Each command uses the *best* checkpoint by default; the user can substitute the *final* path if they want the last-step model instead.
 
 ### Final report — provisioning failure
 

@@ -55,7 +55,9 @@ def compile_state(h: Harness, st: State) -> str:
         parts.extend(f"- `{s}`" for s in st.skills)
         parts.append("")
     if st.human_checkpoints:
-        parts.append("## Human Checkpoints")
+        # Canonical key is `Hand-off Points` (parser reads either name; this
+        # writer emits the new name for consistency with state-file sources).
+        parts.append("## Hand-off Points")
         parts.append(st.human_checkpoints)
         parts.append("")
     if st.transitions:

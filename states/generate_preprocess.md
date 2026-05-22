@@ -26,7 +26,7 @@ Concretely:
    - It parses with `python -m py_compile`.
    - The output columns it would produce match what verl's `data.<trainer>` config expects.
    - It does not invent any field — every field comes from the HF row or from a deterministic formula on HF row fields.
-6. **HITL checkpoint** — show the generated script and the reasoning (which template, which template's columns map to which HF fields). Ask the user to approve or edit. Skipped with `--no-hitl` (default: proceed with the generated script).
+6. **Always-on hand-off point — approve generated script.** Show the generated `preprocess.py` and the rationale (which template, which HF field maps to which verl column, how `reward_model.ground_truth` is extracted). Ask the user to approve or edit. **This pause is not skipped by `--no-hitl`** (see `skills/global/scientific_principles.md` → Always-on hand-off points). A wrong auto-generated preprocess produces a structurally-valid parquet whose semantic content is garbage, and the trainer burns its full epoch budget learning from it. Catching this here is the only cheap chance.
 7. **Set the return-to flag.** Note that `prepare_data` should now treat this dataset as if it were a known dataset, with `preprocess.py` as the script. Transition back to `prepare_data`.
 
 ## Skills
@@ -38,7 +38,7 @@ Concretely:
 
 ## Hand-off Points
 
-- **Approve generated preprocess script.** Step 6. Skipped with `--no-hitl`.
+- **Approve generated preprocess script.** Step 6. **Always-on**: cannot be skipped by `--no-hitl` (see `skills/global/scientific_principles.md`).
 
 ## Next States
 

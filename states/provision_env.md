@@ -29,7 +29,16 @@ Concretely:
    - `model` is an HF id (e.g., `Qwen/Qwen3-4B`) and not yet cached: pre-download via `huggingface-cli download <id> --local-dir <hf_cache>/...` so the training launch isn't waiting on HF. Use `$HF_TOKEN` for gated models.
    - `model` is a local path: verify it exists, list `config.json` + safetensor shards, sanity-check the shard count vs `config.json`'s `num_hidden_layers`.
    Record the resolved local path; the recipe's `actor_rollout_ref.model.path` (or equivalent) will be patched to it.
-5. **Output dir.** `mkdir -p <output_dir>`. Confirm writable. Compute available disk: `df -h <output_dir>` and warn if < 100 GB free.
+5. **Output dir + scratch / quota checks.**
+   - `mkdir -p <output_dir>`. Confirm writable.
+   - `df -h <output_dir>`; warn into `env_state.md` if < 100 GB free.
+   - `df -h "$HF_HOME"`; warn if < 50 GB free (model weights + HF cache).
+   - **Quota-leak detection.** If `<output_dir>` or `$HF_HOME` resolves under `$HOME` (a common foot-gun on cloud-Slurm clusters where `$HOME` has a small quota and the real space is on `$SCRATCH` or a JuiceFS mount), emit a `## Storage warning` block in `env_state.md` recommending the user re-point them at the cluster's scratch tier. Concretely:
+     ```bash
+     realpath "$OUTPUT_DIR" | head -c $(echo -n "$HOME" | wc -c)
+     # if the prefix equals $HOME exactly → warning
+     ```
+   - Record `$HF_HOME`, `$OUTPUT_DIR`, `$SCRATCH` (if set) verbatim under `## Storage` in `env_state.md` so the user can audit them.
 6. **Wandb.** If wandb is configured in the intent, run `wandb login --verify` (or echo `$WANDB_API_KEY` is set). If wandb is unset, ensure `WANDB_DISABLED=true` is in the launch env.
 7. **For slurm targets only:** dry-run the slurm template — `sbatch --test-only <template>` — to confirm the directives are syntactically valid and the partition exists. Don't actually queue the job; this is a syntactic check.
 8. **Write `workspace/env/env_state.md`** with:
@@ -65,14 +74,14 @@ Concretely:
 
 ## Next States
 
-### launch_training
+### sanity_rollout
 
 **Condition:** `workspace/env/env_state.md` confirms verl + torch + inference backend importable on the target; model weights are resolved to a local path; output directory exists and is writable; slurm dry-run passed (if slurm target).
 
 **Deliverables:**
 
 - env_state: The provisioning report — torch/cuda/verl/vllm versions, resolved model path, output dir + free disk, wandb status, slurm syntactic-validation result.
-- launch_env: A `launch_env.sh` script (`workspace/env/launch_env.sh`) that exports every env-var the launch needs. `launch_training` sources this so the launched job has a deterministic env.
+- launch_env: A `launch_env.sh` script (`workspace/env/launch_env.sh`) that exports every env-var the launch needs. Both `sanity_rollout` and `launch_training` source this so their compute environments are identical.
 
 ### finalize
 

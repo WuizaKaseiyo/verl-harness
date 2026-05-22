@@ -11,6 +11,10 @@ These are the fields every downstream state reads from `workspace/intake/trainin
 | `model` | yes | user (HF id or absolute local path) | none |
 | `dataset` | yes | user (known name / HF id / parquet path) | none |
 | `compute_pref` | no | user | `auto` |
+| `reward_kind` | no | user | `rule` (when dataset is in `dataset_registry`); ask the user when the dataset is autogen or local-parquet without a registered `data_source` |
+| `reward_model.path` | conditional | user | required when `reward_kind=model` |
+| `reward.custom_reward_function.path` | conditional | user or harness-authored | required when `reward_kind ∈ {custom, shaped}`; if the user supplies a path, the authoring HITL in `configure_reward` is skipped (sanity check still runs) |
+| `cost_gate_threshold_node_hours` | no | user | `50` (set in `skills/global/scientific_principles.md`); override per-run if the user wants a stricter or looser autonomous-mode safety rail |
 | `nodes` | no | user | inherit recipe default at `locate_recipe` |
 | `gpus_per_node` | no | user | inherit recipe default |
 | `train_batch_size` | no | user | inherit recipe default |
@@ -51,10 +55,11 @@ Default prompt to the user when intake is entered cold:
 
 > I'm the verl-harness intake. To set up a training run I need:
 > (1) the path to your verl checkout (or `$VERL_HOME` already set),
-> (2) the trainer algorithm (e.g. ppo, grpo, sft),
+> (2) the trainer algorithm (e.g. ppo, grpo, sft, dpo),
 > (3) the model (HF id or local path),
 > (4) the dataset (a known verl name like `gsm8k`, a HuggingFace dataset id, or a local parquet path),
-> (5) the compute target (`auto` lets me decide; or `local-direct` / `local-slurm` / `ssh-slurm`).
+> (5) the reward kind: `rule` (deterministic; default for known datasets), `model` (pre-trained RM), `custom` (Python function I author or you supply), or `shaped` (composed rule+RM+penalties),
+> (6) the compute target (`auto` lets me decide; or `local-direct` / `local-slurm` / `ssh-slurm`).
 >
 > Anything else (batch sizes, nodes, epochs, output dir, wandb project) — give it if you have a preference; otherwise I'll inherit verl's recipe defaults.
 
@@ -71,9 +76,11 @@ The intake state may pose follow-ups only when a required field is missing or am
 - model: Qwen/Qwen3-4B
 - dataset: gsm8k        # known verl name
 - compute_pref: auto
+- reward_kind: rule                    # rule | model | custom | shaped — drives configure_reward branching
 - output_dir: /opt/verl/outputs/2026-05-21T13-50-00/
 - seed: 1
 - wandb.enabled: false
+- cost_gate_threshold_node_hours: 50   # threshold above which the cost gate fires even under --no-hitl
 
 ## User-supplied scale knobs
 - nodes: 1

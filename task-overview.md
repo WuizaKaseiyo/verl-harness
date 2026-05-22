@@ -32,7 +32,20 @@ The behaviour each item references has been **verified against `/Users/steven/ve
 - **Inference-time generation pipelines.** `examples/generation/` is for generation experiments, not training. Out of scope here.
 - **Docker / container builds.** `docker/Dockerfile.stable.vllm`, `docker/Dockerfile.stable.sglang`, etc. exist; the harness assumes the user has a working `python -c 'import verl'` and does not build or push containers.
 - **Megatron parallelism design decisions.** TP / PP / CP / DP splits come from the chosen recipe's defaults; the harness passes user-supplied `--nodes` / `--gpus-per-node` through but does not advise on the parallelism mix.
-- **Custom reward-model design.** The harness passes `--reward-model.path` (or the recipe's default reward field) through; designing a custom reward head, training a reward model from scratch, or curating preference data is the user's job.
+- **Reward-model training itself.** The harness does not yet train a reward model from scratch (roadmap Phase 2). For *using* a pre-trained reward model in PPO/GRPO etc., see the supported `reward_kind: model` flow below.
+
+### What this DOES reproduce (reward engineering — Phase 1+)
+
+verl exposes four ways to score model outputs; the harness surfaces all of them as first-class concerns:
+
+| `reward_kind` | Mechanism | Configured via |
+|---|---|---|
+| `rule` | Built-in deterministic reward fn (e.g., gsm8k correctness, math final-answer extraction) | `reward_model.style=rule` + `reward_model.ground_truth` in the dataset row; nothing else needed |
+| `model` | Pre-trained reward model that scores assistant responses | `reward_model.path=<HF id or local path>` + `reward_model.input_tokenizer` |
+| `custom` | User-supplied Python function called per response | `reward.custom_reward_function.path=<py file>` + `reward.custom_reward_function.name=<callable>`; see `skills/reward_custom/` |
+| `shaped` | Composition of multiple rewards (format + correctness + length) with weights | `skills/reward_shaping/` describes the composition pattern; usually realised as a custom function |
+
+The `configure_reward` state (between `prepare_data` and `select_compute`) is where the user picks one of these and the harness writes `workspace/reward/reward_config.md` for `launch_training` to patch into the CLI.
 - **`recipe/` subtree contents.** verl's `recipe/` directory exists but is empty in some checkouts (including the current `/Users/steven/verl`). The harness enumerates it as a fallback search location; if a future checkout populates it, recipes there will be picked up automatically.
 - **Fabricated metrics, checkpoints, or success verdicts.** If training crashes, the run report says so plainly. The harness never invents a loss curve or a checkpoint path.
 
@@ -53,12 +66,27 @@ When you have a verl checkout, a dataset (named or referenceable by HuggingFace 
 │                  │  or fall back to constructing a launch command from verl.trainer.main_*
 └─────┬────────────┘
       ▼
+┌──────────────────────┐
+│ configure_algorithm  │  apply algo_<name> skill (ppo/grpo/dpo/sft/rm/distill);
+│                      │  surface algorithm-specific knobs + dataset-column requirements;
+│                      │  write workspace/algorithm/algorithm_config.md.
+│                      │  halts if algorithm has no first-class trainer (dpo/rm).
+└─────┬────────────────┘
+      ▼
 ┌──────────────────┐    unknown dataset    ┌────────────────────┐
 │  prepare_data    │──────────────────────▶│ generate_preprocess │
 │                  │◀──────────────────────│ (write a verl-style │
 │  (verl preprocess script for known        │ preprocess script   │
-│   datasets; produces parquet)             │ for an HF dataset)  │
-└─────┬────────────┘                       └────────────────────┘
+│   datasets; produces parquet; row-0       │ for an HF dataset)  │
+│   sample displayed in HITL; column         └────────────────────┘
+│   shape validated against algorithm)
+└─────┬────────────┘
+      ▼
+┌──────────────────┐
+│ configure_reward │  pick reward_kind ∈ {rule, model, custom, shaped};
+│                  │  author compute_score.py if custom/shaped;
+│                  │  write workspace/reward/reward_config.md
+└─────┬────────────┘
       ▼
 ┌──────────────────┐
 │  select_compute  │  decide: local-direct | local-slurm | ssh-slurm
@@ -67,6 +95,12 @@ When you have a verl checkout, a dataset (named or referenceable by HuggingFace 
 ┌──────────────────┐
 │  provision_env   │  ROCR/CUDA + VLLM_USE_V1 pre-flight, then torch/cuda/verl import,
 │                  │  resolve model weights, mkdir output_dir, write launch_env.sh
+└─────┬────────────┘
+      ▼
+┌──────────────────┐
+│  sanity_rollout  │  re-uses provision_env's launch_env.sh; loads model + samples
+│                  │  1 response + invokes reward fn + 10-row distribution.
+│                  │  fail → short-circuit to finalize (no real training spent)
 └─────┬────────────┘
       ▼
 ┌──────────────────┐

@@ -93,8 +93,16 @@ After preprocessing succeeds, write `workspace/dataset/dataset.md`:
 - val_files: workspace/dataset/gsm8k/test.parquet (rows: 1319, size: 0.7 MB)
 
 ## Schema
-- columns: [prompt, data_source, ability, reward_model, extra_info]
-- prompt sample (row 0): [{"role":"user","content":"..."}]
+- columns: [prompt, data_source, ability, reward_model, extra_info]                    # missing canonical columns flagged with FAIL
+
+## Row-0 sample (mandatory — used by prepare_data HITL display)
+- prompt: [{"role":"user","content":"..."}]                                            # full content, not truncated
+- data_source: "openai/gsm8k"
+- ability: "math"
+- reward_model.style: "rule"
+- reward_model.ground_truth: "72"
+- extra_info: {"split": "train", "index": 0, ...}
+- response (SFT only): "Janet sells 16 - 3 - 4 = 9 eggs..."                             # only for SFT data; omit otherwise
 
 ## HF cache used
 - $HF_HOME = /home/.../.cache/huggingface

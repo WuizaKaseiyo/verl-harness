@@ -94,6 +94,37 @@ Fix suggestion: check inter-node network (`ibstat`, `ucx_info`), confirm NCCL en
 
 Fix suggestion: lower `rollout.gpu_memory_utilization`, reduce `tensor_model_parallel_size`, switch to sglang.
 
+### Per-algorithm progress signals
+
+Beyond the universal stability thresholds below, each algorithm family has progress signals that *only* make sense for it. The monitor emits anomalies / liveness signals from this set in addition to the universal ones, picking the right set from `workspace/algorithm/algorithm_config.md`.
+
+| Algorithm | Signal | Healthy band | Anomaly when |
+|---|---|---|---|
+| PPO | `critic/value_loss` | Declining trend over first 200 steps | Flat or growing after step 100 — critic not learning |
+| PPO | `critic/explained_variance` | `> 0.0`, ideally `> 0.5` | `≤ 0.0` for 50 consecutive steps |
+| PPO + GRPO family | `actor/pg_loss` | Negative-and-trending-toward-zero | Stays positive — policy is anti-learning |
+| GRPO (any) | Group-reward std (in `actor/<...>/group_std` if logged; else inferred) | `> 0.05 × mean reward magnitude` | `< 0.01 × mean` for 20 steps — group variance collapse, advantages are noise |
+| GRPO-passk | `val/pass_at_k` | Monotone non-decreasing | Drop > 5% from running max |
+| GDPO | per-component `gdpo/<key>/mean` | Each balanced w.r.t. its weight | One component dominates the sum by > 5× |
+| SFT | `val/loss` | Monotone decreasing for first epoch | Increasing after step 100 — over-fit or LR too high |
+| Distillation (online) | `algorithm.distill_loss` | Decreasing | Saturates at 0 immediately → student already mimics teacher |
+| Distillation (offline) | `train/distill_loss` ≈ `train/ce_loss` (when `ce_loss_weight > 0`) | Both decreasing | Distill loss decreasing while CE stays flat — student copies teacher's mistakes |
+
+### RL-stability thresholds (PPO-family — universal)
+
+These are not crashes — they are *signals* that the policy is drifting. Each fires as an anomaly when the parsed metric crosses the threshold for 2+ consecutive logged steps:
+
+| Metric (canonical key from progress.csv) | Threshold | Inferred problem |
+|---|---|---|
+| `actor/kl` (or `training/kl`, depending on logger) | `> 0.05` | KL drift; policy diverging from reference. Suggest lowering `actor.kl_loss_coef` floor or raising `kl_ctrl.target_kl`. |
+| `actor/entropy` | `< 0.5` | Policy collapsing toward greedy. Suggest raising `actor.entropy_coeff` or lowering `rollout.temperature`. |
+| `response/length/mean` | `≥ 0.95 × data.max_response_length` | Truncation; the trainer can't see the end of responses, structural signal lost. Suggest raising `data.max_response_length` (and `actor_rollout_ref.actor.ppo_max_token_len_per_gpu` to match). |
+| `response/length/std` | `< 5` (after step 20) | Mode collapse — all responses the same length. Often co-occurs with low entropy. |
+
+These thresholds are conservative defaults. The user can override per intent (`monitor.kl_threshold`, etc.); document any override in `workspace/intake/training_intent.md`.
+
+Frontend mirroring (dashboard): when the progress chart panel exists, draw a faint horizontal threshold line at each value so the user can see the safety zone visually. (Front-end task — separate change.)
+
 ### Slurm preemption / step error
 
 - `slurmstepd: error: \*\*\* STEP \d+ CANCELLED AT`
@@ -160,6 +191,37 @@ Once `progress.csv` has ≥ 10 rows, compute:
 
 Use these to refine the cost estimate the cost-gate originally presented. Record the refinement in `workspace/logs/throughput.md`.
 
+## Best checkpoint selection
+
+`summarize` and `finalize` need the **best** checkpoint, not just the last. The "best" is defined by the canonical validation metric for the trainer:
+
+| Trainer family | Canonical val metric (lower is better unless noted) | Source-of-truth in this verl |
+|---|---|---|
+| SFT | `val/loss` | `sft_trainer.py` |
+| PPO (`adv_estimator=gae`) | `val/reward/mean` (higher is better) — fall back to `val/score/mean` | `main_ppo` + `algorithm.adv_estimator=gae` |
+| GRPO family (`grpo`, `grpo_passk`, `grpo_vectorized`) | `val/reward/mean` (higher is better); for `grpo_passk` prefer `val/pass_at_k` if logged | `main_ppo` + `adv_estimator=grpo*` |
+| Other PPO-family RL (rloo, remax, gpg, reinforce_plus_plus, gdpo, gmpo, dppo, cispo, sapo, mtp, otb, opo) | `val/reward/mean` (higher is better) | `main_ppo` + `adv_estimator=<name>` |
+| GDPO (Group reward-Decoupled) | `val/reward/mean` for the summed reward; ALSO surface per-component `val/gdpo/<key>/mean` if logged | `main_ppo` + `adv_estimator=gdpo` + `gdpo_reward_keys` |
+| DPO (classic) | n/a — not first-class in this verl; if external trainer used, expects `val/reward_gap` (higher is better) | external (not in this verl) |
+| RM training | n/a — not first-class in this verl; if external trainer used, expects `val/accuracy` (higher is better) | external |
+| On-policy distillation | `val/distill_loss` (lower is better); for mixed distill+CE also surface `val/ce_loss` | `verl/trainer/distillation/` |
+
+A working helper lives at **`skills/training_monitor/templates/pick_best_checkpoint.py`** — `summarize` imports and calls it:
+
+```
+from pick_best_checkpoint import pick_best_checkpoint
+result = pick_best_checkpoint(
+    progress_csv="workspace/logs/progress.csv",
+    output_dir="<output_dir from job_info.md>",
+    trainer_family="grpo",      # from algorithm_config.md
+)
+# result is (best_step, best_value, best_path) or None.
+```
+
+The template records the `CANONICAL_VAL_METRIC` table for every trainer family covered by `algo_*` skills. Extend the table when adding new families.
+
+`job_status.md` records the result under `## Best checkpoint`. `summarize` echoes it to the run report.
+
 ## Status report — `workspace/job/job_status.md`
 
 ```markdown
@@ -180,8 +242,15 @@ success | crashed | preempted | cancelled
 - final_loss: 0.214
 - final_reward: 0.872
 
+## Best checkpoint
+- best_step: 1200
+- best_metric: val/reward/mean = 0.891    # name + value of the trainer-family's canonical val metric
+- best_path: <output_dir>/checkpoints/global_step_1200/
+- (or `best_checkpoint: none — no val metric logged or no save matched the best step` when applicable)
+
 ## Anomalies observed
 - 2026-05-21T14:33:12 — "NCCL WARN: ring 0 timed out" (recovered)
+- 2026-05-21T14:45:00 — `actor/kl = 0.073 > 0.05 threshold` for steps 200-202 (KL drift)
 
 ## Crash tail (only if crashed)
 - pointer to workspace/logs/crash_tail.md
