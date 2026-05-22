@@ -9,6 +9,15 @@ Apply the appropriate compute-target skill (`skills/compute_local`, `skills/comp
 Concretely:
 
 1. **Read** `workspace/intake/training_intent.md`, `workspace/recipe/recipe.md`, `workspace/dataset/dataset.md`, and `workspace/compute/compute_choice.md`.
+
+   Two **pre-flights** are mandatory (see compute_target skill, "Env-collision pre-flight" and "vLLM engine prerequisite" sections):
+
+   1a. **Worker-side env-collision probe.** Run the appropriate probe per the chosen target (in-place for `local-direct`; short srun for `local-slurm` / `ssh-slurm`). If both `ROCR_VISIBLE_DEVICES` and `CUDA_VISIBLE_DEVICES` (or both `HIP_VISIBLE_DEVICES` and `CUDA_VISIBLE_DEVICES`) are set on the worker, the agent **must** inject `unset ROCR_VISIBLE_DEVICES` and `unset HIP_VISIBLE_DEVICES` into `launch_env.sh`. This protects against verl's worker guard at `verl/single_controller/base/worker.py:256-267`, which fires inside the Ray worker actor's `__init__` and is therefore not catchable by import-only checks.
+
+   1b. **vLLM V1 prerequisite.** If `recipe.md` records `rollout.name=vllm`, the agent **must** inject `export VLLM_USE_V1=1` into `launch_env.sh`. This protects against verl's async rollout server (`verl/workers/rollout/vllm_rollout/vllm_async_server.py:35`), which hardcodes the V1 AsyncLLM constructor while modern vllm may silently fall back to V0.
+
+   Both injections are no-ops when the underlying conditions don't apply; defensive emission is safer than gating on a possibly-stale probe.
+
 2. **Python + torch + verl import check.** Run:
    ```
    python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
@@ -23,7 +32,22 @@ Concretely:
 5. **Output dir.** `mkdir -p <output_dir>`. Confirm writable. Compute available disk: `df -h <output_dir>` and warn if < 100 GB free.
 6. **Wandb.** If wandb is configured in the intent, run `wandb login --verify` (or echo `$WANDB_API_KEY` is set). If wandb is unset, ensure `WANDB_DISABLED=true` is in the launch env.
 7. **For slurm targets only:** dry-run the slurm template — `sbatch --test-only <template>` — to confirm the directives are syntactically valid and the partition exists. Don't actually queue the job; this is a syntactic check.
-8. **Write `workspace/env/env_state.md`** with: torch/cuda/verl versions, model path resolved, output dir + free disk, inference backend status, wandb status, slurm dry-run result (if applicable). Also write a `workspace/env/launch_env.sh` that exports every needed env-var (`HF_HOME`, `HF_TOKEN`, `WANDB_*`, `PYTHONPATH=<VERL_ROOT>`, …). `launch_training` will source this.
+8. **Write `workspace/env/env_state.md`** with:
+   - **`## Env-collision pre-flight`** — verbatim `env | grep -E '^(ROCR|HIP|CUDA)_VISIBLE_DEVICES'` output from the worker, plus whether `unset ROCR/HIP` was injected.
+   - **`## vLLM engine prerequisite`** — whether `recipe.md` triggered the `export VLLM_USE_V1=1` injection (and the rollout backend the trigger keyed on).
+   - torch/cuda/verl/vllm versions
+   - model path resolved
+   - output dir + free disk
+   - wandb status
+   - slurm dry-run result (if applicable)
+
+   Also write a `workspace/env/launch_env.sh` that:
+   - leads with the `unset ROCR_VISIBLE_DEVICES; unset HIP_VISIBLE_DEVICES` (defensive — no-op when not needed);
+   - exports `VLLM_USE_V1=1` if vllm rollout is in the recipe;
+   - sets `PYTHONPATH=<VERL_ROOT>` (in case verl isn't `pip install -e .`'d into the active env);
+   - exports `HF_HOME`, `HF_TOKEN`, `WANDB_*`, and any other run-specific env-vars.
+
+   `launch_training` will `source` this file before any python launch.
 
 ## Skills
 

@@ -20,6 +20,7 @@ Located under `<verl_root>/examples/data_preprocess/`. The harness binds the use
 | `multiturn`                       | `examples/data_preprocess/multiturn.py`                        | train / test            | Multi-turn SFT        |
 | `pokemon`                         | `examples/data_preprocess/pokemon.py`                          | train / test            | Tutorial / sanity     |
 | `preprocess_search_r1_dataset`    | `examples/data_preprocess/preprocess_search_r1_dataset.py`     | train / test            | Search-R1 style       |
+| `chess_fen_cycle`                 | `examples/data_preprocess/chess_fen_cycle.py`                  | train / test            | Chess-DuPO FEN cycle (rule reward; ground_truth = original FEN) |
 
 The agent should **re-confirm the list against the actual files on disk** at `<verl_root>/examples/data_preprocess/` before binding — verl evolves, and the on-disk truth wins. The table above is the current snapshot; treat it as a hint, not as source-of-truth.
 

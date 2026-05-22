@@ -6,6 +6,40 @@ The agent's shell *is* the training shell. The training process runs as a child 
 
 Run these locally. Record verbatim outputs in `workspace/env/env_state.md`.
 
+### Env-collision pre-flight (REQUIRED before any verl launch)
+
+verl's `_setup_env_cuda_visible_devices` (at `verl/single_controller/base/worker.py:256-267`) raises `ValueError("Please don't set ROCR_VISIBLE_DEVICES when HIP/CUDA_VISIBLE_DEVICES is set.")` when both are set. This crash occurs inside the *Ray worker actor's `__init__`* — past every standard provisioning check (sbatch dry-run, `import verl/torch/vllm`). It is therefore not catchable by import-only probes; the harness must pre-flight the env explicitly.
+
+For `local-direct`, the agent's own shell *is* the worker, so probe in-place:
+
+```bash
+env | grep -E '^(ROCR|HIP|CUDA)_VISIBLE_DEVICES' || echo '(none set)'
+```
+
+If both `ROCR_VISIBLE_DEVICES` and `CUDA_VISIBLE_DEVICES` are set, OR both `HIP_VISIBLE_DEVICES` and `CUDA_VISIBLE_DEVICES` are set with different values, the harness **must inject** the following lines into the head of the generated `launch_env.sh`:
+
+```bash
+unset ROCR_VISIBLE_DEVICES   # set by some site configs for cross-vendor portability;
+                              # collides with verl's worker.py:267 guard on NVIDIA hosts.
+unset HIP_VISIBLE_DEVICES    # defensive — same family of variables.
+```
+
+Record the collision (with the verbatim env-grep output) in `env_state.md` under a `## Env-collision pre-flight` heading.
+
+### vLLM engine prerequisite (REQUIRED when recipe uses `rollout.name=vllm`)
+
+verl's async rollout server (`verl/workers/rollout/vllm_rollout/vllm_async_server.py:35`) imports `from vllm.v1.engine.async_llm import AsyncLLM` — **hardcoded V1**. With modern vllm (≥0.10.0) and certain config combinations (e.g., `enable_sleep_mode=True`, background-thread engine), vllm silently falls back to V0 unless `VLLM_USE_V1=1` is explicitly set. verl then refuses with `ValueError: Using V1 AsyncLLMEngine, but envs.VLLM_USE_V1=False.`
+
+If `workspace/recipe/recipe.md` records `rollout.name=vllm`, the harness **must inject** into `launch_env.sh`:
+
+```bash
+export VLLM_USE_V1=1   # required by verl/workers/rollout/vllm_rollout/vllm_async_server.py (V1-only).
+```
+
+Record the injection (with the recipe-side trigger) in `env_state.md` under a `## vLLM engine prerequisite` heading.
+
+### Standard checks (run after the pre-flights above)
+
 ```bash
 # torch + cuda
 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.device_count())"

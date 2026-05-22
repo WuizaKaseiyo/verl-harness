@@ -2,14 +2,36 @@ verl_recipes skill — how to bind the user's intent to an actual verl launch pa
 
 ## What verl ships
 
-The verl checkout has two parallel locations for runnable training scripts:
+The verl checkout has multiple locations for runnable training scripts. **Always verify the layout on disk before assuming** — verl evolves, and the on-disk truth wins. Common patterns observed:
 
 1. **`<verl_root>/examples/<algorithm>_trainer/run_*.sh`** — the long-standing example recipes. Naming convention: `run_<model_slug>_<backend>.sh` (e.g., `run_qwen3_8b_fsdp.sh`, `run_qwen2_5_32b_fsdp.sh`, `run_deepseek_v3_671b_megatron.sh`). Each script accepts env-var overrides for model path, scale, batch size, learning rate, rollout config, total epochs.
-2. **`<verl_root>/recipe/<algorithm>_trainer/run_*.sh`** — newer / more curated recipes. Same naming convention. Tends to lag the examples but is more curated.
+2. **`<verl_root>/examples/sft/<dataset>/run_*.sh`** — SFT lives in a separate tree shaped by *dataset*, not algorithm. SFT does not go through `main_ppo`; it has its own trainer module (see "Module landscape" below).
+3. **`<verl_root>/recipe/<name>/`** — newer / more curated recipes. **Layout varies between checkouts**: some versions nest `recipe/<algorithm>_trainer/`, others put recipes in a flat `recipe/<name>/` tree (e.g., one folder per dataset or per published paper). `ls <verl_root>/recipe/` before assuming.
 
-Some algorithms only have entries in one location; some have both. Always search both.
+Some algorithms only have entries in one location; some have both. Always enumerate.
 
-If neither has a script for the requested `(algorithm, model)`, fall back to invoking the trainer module directly: `python -m verl.trainer.main_<algorithm>` with explicit CLI overrides. verl uses Hydra-style overrides — every config field is exposed as `dotted.path=value`. Common ones:
+### Module landscape (verified against `verl/trainer/`)
+
+The harness must NOT assume a `main_<algorithm>.py` exists for every algorithm. Concretely, on a typical recent verl checkout (e.g., 0.8.0.dev), the only `verl.trainer.main_*` modules that exist are:
+
+```
+verl/trainer/main_ppo.py            ← PPO + the whole PPO-family RL algorithm set
+verl/trainer/main_ppo_sync.py       ← synchronous-rollout variant of main_ppo
+verl/trainer/main_eval.py           ← evaluation only
+verl/trainer/main_generation_server.py
+verl/trainer/sft_trainer.py         ← SFT (NOT main_sft; module name differs)
+verl/trainer/sft_trainer_ray.py     ← SFT with Ray
+```
+
+So the rule for algorithm binding is:
+
+- **PPO-family RL algorithms (grpo, rloo, remax, gae, reinforce_plus_plus, dapo, dppo, gpg, gspo, gdpo, gmpo, cispo, sapo, mtp, opo, otb, …)** → route through `verl.trainer.main_ppo` with `algorithm.adv_estimator=<algo>`. The authoritative list of accepted estimator names is the **`AdvantageEstimator` enum** at `verl/trainer/ppo/core_algos.py` (class definition; do not hardcode the list in the harness — read the enum). Custom advantage estimators registered via `@register_adv_est("<name>")` are also valid.
+- **SFT** → use `verl.trainer.sft_trainer` (FSDP) or `verl.trainer.sft_trainer_ray` (Ray); choose by the user's scale (Ray for multi-node, FSDP for single-node).
+- **An algorithm name the user types that is neither in the enum, nor maps to an SFT/eval/generation module, nor has a script under `examples/` or `recipe/`** → halt with a clear "no such trainer in this verl checkout" message.
+
+If a shell script under `examples/<algorithm>_trainer/` or `recipe/<name>/` matches the request, **prefer it over the direct-module path** — recipes encode the recommended hyperparameters and rollout config for the (algo, model, backend) combo.
+
+If no shell script matches but the algorithm is binding-able per the rules above, construct the launch command from the appropriate module entry point. verl uses Hydra-style overrides — every config field is exposed as `dotted.path=value`. Common ones:
 
 - `data.train_files=<path>` / `data.val_files=<path>`
 - `data.train_batch_size=<N>`
@@ -24,7 +46,15 @@ If neither has a script for the requested `(algorithm, model)`, fall back to inv
 - `actor_rollout_ref.rollout.tensor_model_parallel_size=<TP>`
 - `actor_rollout_ref.rollout.gpu_memory_utilization=<float>`
 
-The exact set of fields a trainer accepts is in `<verl_root>/verl/trainer/config/<algorithm>_*.yaml` — load that to validate overrides before assembling the command.
+The exact set of fields a trainer accepts is in **`<verl_root>/verl/trainer/config/`** — load it before assembling the command. The layout is Hydra-hierarchical:
+
+- `ppo_trainer.yaml` — the PPO-family entry config (used by all `algorithm.adv_estimator` values).
+- `ppo_megatron_trainer.yaml` — Megatron backend variant.
+- `sft_trainer_engine.yaml` — SFT engine config.
+- `_generated_*.yaml` — composed snapshots (read-only; for reference only).
+- Subdirectories `actor/`, `algorithm/`, `critic/`, `data/`, `engine/`, `model/`, `optim/`, `ref/`, `reward/`, `rollout/`, `profiler/`, … — Hydra config groups; each contains the validated field set for that subsection.
+
+There is **no per-algorithm YAML** (no `grpo_trainer.yaml`, no `sft_trainer.yaml`); the algorithm is selected by the `algorithm.adv_estimator` override at launch time, not by a different config file. (Older or differently-laid-out verl checkouts may differ — verify with `ls <verl_root>/verl/trainer/config/`.)
 
 ## Scoring candidates
 
@@ -39,14 +69,30 @@ If exactly one candidate scores above a confidence threshold → pick it. If mul
 
 ## Direct-module fallback
 
-When no shell-script recipe matches, construct the launch command directly. Steps:
+When no shell-script recipe matches, construct the launch command from the appropriate module entry per the "Module landscape" rules above. Steps:
 
-1. Confirm `verl.trainer.main_<algorithm>` exists as a Python module: `python -c "import importlib; importlib.import_module('verl.trainer.main_<algorithm>')"`. If it doesn't, the user's algorithm name is wrong — halt with "no such trainer".
-2. Load `<verl_root>/verl/trainer/config/<algorithm>_megatron_trainer.yaml` (or the matching FSDP config) to discover the trainer's full set of accepted fields.
+1. **Decide the module.** Run:
+   ```bash
+   python -c "import importlib; importlib.import_module('verl.trainer.main_<algorithm>')"
+   ```
+   If it succeeds, use it (rare — usually only `main_ppo`/`main_ppo_sync`/`main_eval` succeed).
+
+   Otherwise, check whether `<algorithm>` is a valid PPO-family `adv_estimator`:
+   ```bash
+   python -c "from verl.trainer.ppo.core_algos import AdvantageEstimator, ADV_ESTIMATOR_REGISTRY; \
+              print(<algorithm> in {e.value for e in AdvantageEstimator} | set(ADV_ESTIMATOR_REGISTRY))"
+   ```
+   If `True`, the module is `verl.trainer.main_ppo` and the CLI must include `algorithm.adv_estimator=<algorithm>`.
+
+   Otherwise, if `<algorithm> == "sft"`, the module is `verl.trainer.sft_trainer` (or `sft_trainer_ray` for multi-node). Note that SFT does not accept the PPO-family overrides below; its config surface is `sft_trainer_engine.yaml` + the `data`/`model`/`optim` Hydra groups.
+
+   If none of the above: halt with "no such trainer in this verl checkout: <algorithm>".
+
+2. Load `<verl_root>/verl/trainer/config/ppo_trainer.yaml` (or `sft_trainer_engine.yaml` for SFT) to discover the trainer's full set of accepted fields.
 3. Construct the CLI:
    ```
-   python -m verl.trainer.main_<algorithm> \
-     algorithm.adv_estimator=<inferred default> \
+   python -m verl.trainer.main_ppo \
+     algorithm.adv_estimator=<algorithm> \
      data.train_files=<from prepare_data> \
      data.val_files=<from prepare_data> \
      data.train_batch_size=<user or default> \

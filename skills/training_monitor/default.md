@@ -16,9 +16,19 @@ The monitor loop exits when one of these is true. Each maps to a status the `sum
 
 All three must hold:
 
-1. Job exit signal — `kill -0 <pid>` returns nonzero (local-direct) or `sacct` reports `COMPLETED` (slurm).
-2. `<output_dir>/checkpoints/` contains at least one numbered checkpoint directory (verl convention: `global_step_<N>/`).
-3. The trainer's stdout contains a "training finished" / "training complete" marker, OR the final logged step equals the recipe's `total_training_steps` (i.e., the trainer ran the whole curriculum).
+1. **Job exit signal** — `kill -0 <pid>` returns nonzero (local-direct) or `sacct` reports `COMPLETED` (slurm).
+2. **Checkpoint OR last-step parity** — at least one of:
+   - `<output_dir>/checkpoints/global_step_<N>/` exists (verl saves checkpoints at this path; the convention is hardcoded in `verl/trainer/ppo/ray_trainer.py:940` as `f"global_step_{self.global_steps}"`). Note: if the recipe sets `trainer.save_freq=-1` (common for smoke / no-save runs), there will be **no** checkpoint directory even on a successful run — fall through to the next bullet.
+   - The trainer's stdout shows the final-step marker (next bullet) — sufficient on its own when `save_freq=-1`.
+3. **Terminal marker in stdout** — verl prints exactly one line at the end of `fit()`:
+   ```
+   'Final validation metrics: {...}'
+   ```
+   (the source is `verl/trainer/ppo/ray_trainer.py:1756`: `pprint(f"Final validation metrics: {last_val_metrics}")`). Match with:
+   ```python
+   TERMINAL_SUCCESS = re.compile(r"Final validation metrics:")
+   ```
+   No "training finished" / "training complete" string exists in verl source — do not look for those.
 
 ### Crash
 
@@ -54,10 +64,16 @@ OOM is usually fatal; the harness writes a crash anomaly *and* records the sugge
 
 ### NaN / Inf
 
-- `loss is nan`
+**Caveat:** the specific phrasing of NaN messages depends on whether they originate from PyTorch's `_check_finite_grad` paths, vLLM, or the recipe's own asserts. The patterns below mix verl-typical and torch-generic shapes; verify on the user's checkout that at least one matches:
+
+- `loss is nan`                                   (typical custom logger string)
 - `loss=inf`
 - `gradient is nan`
-- `RuntimeError: Function .* returned nan values`
+- `RuntimeError: Function .* returned nan values` (torch-side)
+- `assert.*not torch.isnan`                       (verl asserts)
+- A metric-dict line where `'actor/pg_loss': nan` (also `'reward/mean': nan`, `'critic/value_loss': nan`)
+
+If none of the literal-string patterns match on a real verl run, fall back to scanning the namespaced metric stream (from the progress parser above) for any value parsing as `nan` / `inf` — that catches the failure regardless of how the trainer chose to surface it.
 
 Fix suggestion: lower learning rate, enable gradient clipping (already 1.0 in verl defaults), check the dataset for poisoned rows.
 
@@ -87,21 +103,53 @@ Treat as a normal `preempted` terminal status if `sacct` confirms; otherwise it'
 
 ## Progress extraction
 
-verl's trainer logs follow a fairly stable format. The skill parses lines like:
+verl's trainer does NOT emit a single-line `step:N, epoch:N, train_loss:X, ...` log format. Progress flows through the `Tracking` logger at `verl/trainer/ppo/ray_trainer.py:1722` (`logger.log(data=metrics, step=self.global_steps)`) and, when the user configures `trainer.logger=["console"]`, lands on stdout as a **namespaced metric dict** with keys like:
 
 ```
-step:50, epoch:0, train_loss:0.234, reward:0.812, response_length:148.7, kl:0.0034, lr:1.0e-06
+training/global_step
+training/epoch
+actor/grad_norm
+actor/lr
+actor/pg_loss
+actor/entropy
+critic/value_loss          (PPO only)
+response/length/mean
+response/length/std
+response/length/max
+reward/mean
+reward/std
+training/timing/step       (seconds)
+throughput/tokens_per_sec
 ```
 
-with the regex:
+The exact stdout shape varies by console backend (`pprint`-style multi-line, or one-line repr). Parse defensively — accept both. The recommended two-pass parser:
 
+```python
+# Pass 1: detect that a metrics block is starting (the trainer pprints the dict)
+METRIC_DICT_START = re.compile(r"'training/global_step'\s*:\s*(?P<step>\d+)")
+
+# Pass 2: harvest individual key:value pairs within the block.
+#   Matches both `'key': 0.123`, `'key': 1.0e-6`, and `'key': 50` shapes.
+METRIC_KV = re.compile(
+    r"'(?P<key>[\w/]+)'\s*:\s*(?P<val>[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)"
+)
 ```
-^step:(?P<step>\d+),\s*epoch:(?P<epoch>\d+)(?:.*?train_loss:(?P<loss>[-+]?\d*\.?\d+(?:e[-+]?\d+)?))?(?:.*?reward:(?P<reward>[-+]?\d*\.?\d+))?(?:.*?response_length:(?P<resp_len>[\d.]+))?(?:.*?kl:(?P<kl>[-+]?\d*\.?\d+))?
+
+For each block where `METRIC_DICT_START` matched, scan all `METRIC_KV` hits and append one row to `workspace/logs/progress.csv`. The CSV **columns are dynamic** (the union of keys observed so far) rather than the legacy fixed `step,epoch,loss,reward,...` schema. Suggested baseline column ordering: `wallclock, training/global_step, training/epoch, actor/lr, actor/pg_loss, actor/entropy, actor/grad_norm, critic/value_loss, reward/mean, reward/std, response/length/mean, training/timing/step` — but add new columns as new keys appear.
+
+If the user's `trainer.logger` includes a wandb / tensorboard backend rather than `console`, the console may emit a smaller / different subset; do not assume any key is always present.
+
+### Fallback: tqdm progress bar
+
+verl uses `tqdm` (`ray_trainer.py:1364`: `progress_bar = tqdm(total=self.total_training_steps, ...)`) as the visible step counter. Each `progress_bar.update(1)` writes a line like:
 ```
-
-(Adjust if the user's verl version logs different keys — peek at `verl/trainer/main_*.py` for the actual log strings.)
-
-Append each parsed row to `workspace/logs/progress.csv` with columns `wallclock,step,epoch,loss,reward,response_length,kl,lr`.
+Training Progress:  50%|##########          | 50/100 [01:00<01:00,  1.20it/s]
+```
+to stderr (sometimes interleaved into stdout under slurm). Match with:
+```python
+TQDM_LINE = re.compile(r"Training Progress:\s*\d+%\|.*?\|\s*(?P<step>\d+)/(?P<total>\d+)")
+```
+This is a useful liveness signal even when the metric dict isn't yet on stdout (e.g., the first few rollout-bound steps before the first `logger.log` call).
 
 ## Throughput estimate
 

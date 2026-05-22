@@ -29,7 +29,13 @@ def harness_to_mermaid(h: Harness) -> str:
             cond = (tr.condition or "").split("\n")[0]
             if len(cond) > 60:
                 cond = cond[:57] + "…"
-            cond = cond.replace('"', "'")
+            # Mermaid edge-label sanitisation:
+            #   - "  → '   (double quotes close the label)
+            #   - |  → /   (pipe is the label delimiter itself, e.g. `success | crashed`)
+            #   - `  → ''  (backticks confuse Mermaid 11 strict parser)
+            cond = (cond.replace('"', "'")
+                        .replace('|', '/')
+                        .replace('`', ''))
             if cond:
                 lines.append(f'  {name} -->|"{cond}"| {tr.target}')
             else:

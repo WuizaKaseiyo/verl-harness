@@ -10,6 +10,47 @@ Identical to `compute_slurm` in *what* gets run; the difference is *where* — e
 
 ## Provisioning checks (used by `provision_env`)
 
+### Env-collision pre-flight (REQUIRED — same root cause as `compute_slurm`)
+
+verl's `_setup_env_cuda_visible_devices` (at `verl/single_controller/base/worker.py:256-267`) raises `ValueError` when both `ROCR_VISIBLE_DEVICES` and `CUDA_VISIBLE_DEVICES` are set. Probe the remote worker env:
+
+```bash
+ssh <alias> "srun --partition=<remote_partition> --account=<remote_account> \
+                  --gres=gpu:1 --time=0:02:00 --mem=4G --cpus-per-task=1 \
+                  bash -c 'env | grep -E \"^(ROCR|HIP|CUDA)_VISIBLE_DEVICES\" || echo \"(none set)\"'"
+```
+
+If both `ROCR_VISIBLE_DEVICES` and `CUDA_VISIBLE_DEVICES` (or both `HIP_VISIBLE_DEVICES` and `CUDA_VISIBLE_DEVICES`) appear, inject into `launch_env.sh`:
+
+```bash
+unset ROCR_VISIBLE_DEVICES
+unset HIP_VISIBLE_DEVICES
+```
+
+Record the verbatim probe output + injection in `env_state.md` under `## Env-collision pre-flight`.
+
+### vLLM engine prerequisite (REQUIRED when recipe uses `rollout.name=vllm`)
+
+verl's async rollout server hardcodes the V1 AsyncLLM constructor (`vllm_async_server.py:35`). vllm ≥0.10.0 may silently fall back to V0 unless `VLLM_USE_V1=1` is set, causing verl to refuse with `ValueError: Using V1 AsyncLLMEngine, but envs.VLLM_USE_V1=False.`
+
+If `workspace/recipe/recipe.md` records `rollout.name=vllm`, inject into `launch_env.sh`:
+
+```bash
+export VLLM_USE_V1=1
+```
+
+Record the injection in `env_state.md` under `## vLLM engine prerequisite`.
+
+### Container wrapping (same detection as `compute_slurm`)
+
+```bash
+ssh <alias> "grep -E '^\s*(apptainer|singularity|docker)\s+run' $REMOTE_VERL_ROOT/examples/tutorial/slurm/ray_on_slurm.slurm"
+```
+
+Preserve the container wrap if `compute_choice.md` did not record `container: none`. If the user has a Conda env on the remote, switch to the conda activation pattern (see `compute_slurm` skill).
+
+### Standard remote slurm checks
+
 ```bash
 ssh <alias> "sinfo --version; squeue -V"
 ssh <alias> "test -d $REMOTE_VERL_ROOT && echo OK || echo MISSING"
