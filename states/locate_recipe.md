@@ -26,9 +26,10 @@ Concretely:
 ## Skills
 
 - skills/verl_recipes
+- skills/builtin-tools
 - skills/global
 
-## Human Checkpoints
+## Hand-off Points
 
 - **Recipe selection.** When step 5 fires (multiple matches), pause for the user to pick. Skipped with `--no-hitl` (default: pick the highest-scoring candidate).
 - **Direct-module fallback.** When step 6 fires (no shell script matched), pause to show the constructed `python -m verl.trainer.main_<algorithm>` command and ask the user to confirm or edit. Skipped with `--no-hitl` (default: proceed with constructed command, recording it in `recipe.md`).

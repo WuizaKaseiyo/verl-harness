@@ -51,6 +51,7 @@ Concretely:
 ## Skills
 
 - skills/training_monitor
+- skills/builtin-tools
 - skills/global
 
 ## Next States

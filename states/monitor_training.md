@@ -37,11 +37,12 @@ When a terminal condition is reached, **write `workspace/job/job_status.md`** wi
 - skills/compute_local
 - skills/compute_slurm
 - skills/compute_ssh_slurm
+- skills/builtin-tools
 - skills/global
 
 > Of the three `compute_*` skills, **read only the one matching the chosen target** in `workspace/compute/compute_choice.md` for the polling mechanism. The other two are listed for validator coverage.
 
-## Human Checkpoints
+## Hand-off Points
 
 - **Cancellation request.** This state honours a user-initiated cancel during the loop (via the `workspace/job/cancel_requested` file). No proactive pause — the loop runs continuously. Skipped with `--no-hitl` is irrelevant here; the loop is automatic.
 

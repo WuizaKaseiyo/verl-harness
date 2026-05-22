@@ -26,9 +26,10 @@ Concretely:
 
 - skills/dataset_registry
 - skills/dataset_autogen     # only consulted on the unknown-dataset path
+- skills/builtin-tools
 - skills/global
 
-## Human Checkpoints
+## Hand-off Points
 
 - **Confirm prepared data.** After step 3, before transitioning. Skipped with `--no-hitl`.
 

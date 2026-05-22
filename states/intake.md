@@ -25,9 +25,10 @@ Concretely:
 ## Skills
 
 - skills/intake
+- skills/builtin-tools
 - skills/global
 
-## Human Checkpoints
+## Hand-off Points
 
 - **Confirm normalised intent.** After step 4, present the fully-normalised training spec and pause for user confirmation. Skipped with `--no-hitl`.
 

@@ -54,11 +54,12 @@ Concretely:
 - skills/compute_local
 - skills/compute_slurm
 - skills/compute_ssh_slurm
+- skills/builtin-tools
 - skills/global
 
 > Of the three `compute_*` skills, **read only the one matching the chosen target** in `workspace/compute/compute_choice.md`. The other two are listed so the harness validator sees them as registered, but they are not consulted on this run.
 
-## Human Checkpoints
+## Hand-off Points
 
 - **Confirm provisioning result.** After step 8 — show the env_state.md summary, the resolved model path, the output dir size, and the launch_env.sh. Skipped with `--no-hitl`.
 

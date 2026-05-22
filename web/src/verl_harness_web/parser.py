@@ -163,7 +163,10 @@ def _parse_state(path: Path) -> State:
         token = b.split("#", 1)[0].strip()
         if token.startswith("skills/"):
             skills.append(token)
-    hcps = secs.get("Human Checkpoints", "").strip()
+    # Canonical key is `Hand-off Points` (matches FastHarness validate-harness +
+    # fastharness-web/tui parsers). The older `Human Checkpoints` name is read
+    # as a fallback for in-flight harnesses that haven't migrated yet.
+    hcps = secs.get("Hand-off Points", secs.get("Human Checkpoints", "")).strip()
     transitions: list[Transition] = []
 
     next_block = secs.get("Next States", "")
@@ -206,7 +209,10 @@ def parse_harness(root: Path) -> Harness:
         starting = sstate.splitlines()[0].lstrip("- ").strip()
         if starting.startswith("states/"):
             starting = Path(starting).stem
-    hitl = secs.get("Human in the Loop", "").strip().split("\n", 1)[0].strip()
+    # Canonical key is `Hand-off Points`; accept the older `Human in the Loop`
+    # as a fallback for in-flight harnesses.
+    _hitl_raw = secs.get("Hand-off Points", secs.get("Human in the Loop", ""))
+    hitl = _hitl_raw.strip().split("\n", 1)[0].strip()
     caps = _parse_capability_tokens(secs.get("Required Capabilities", ""))
     notes = secs.get("Notes", "").strip()
 

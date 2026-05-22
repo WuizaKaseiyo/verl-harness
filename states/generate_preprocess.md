@@ -33,9 +33,10 @@ Concretely:
 
 - skills/dataset_autogen
 - skills/dataset_registry    # for the canonical column rules
+- skills/builtin-tools
 - skills/global
 
-## Human Checkpoints
+## Hand-off Points
 
 - **Approve generated preprocess script.** Step 6. Skipped with `--no-hitl`.
 

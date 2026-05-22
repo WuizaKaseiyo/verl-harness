@@ -31,9 +31,10 @@ Concretely:
 ## Skills
 
 - skills/compute_select
+- skills/builtin-tools
 - skills/global
 
-## Human Checkpoints
+## Hand-off Points
 
 - **Confirm compute target + slurm parameters.** Step 5. Skipped with `--no-hitl`.
 

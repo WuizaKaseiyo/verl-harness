@@ -51,6 +51,7 @@ Concretely:
 
 ## Skills
 
+- skills/builtin-tools
 - skills/global
 
 <!--
