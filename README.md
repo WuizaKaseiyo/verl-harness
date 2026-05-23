@@ -17,16 +17,23 @@ The harness is a finite state machine specified entirely in markdown — every s
 ## FSM diagram
 
 ```
-intake → locate_recipe → configure_algorithm → prepare_data ⇄ generate_preprocess
-                                                              ↓
-                            configure_reward → select_compute → provision_env → sanity_rollout → launch_training → monitor_training → summarize → finalize
-                                                                                        ↓                                                              ↑
-                                                                                        ├─ sanity_failed ─────────────────────────────────────────────┤
-                                                                                        │                                                              │
-                                  (configure_algorithm halt: dpo/rm with no first-class trainer also exits here)                                       │
-                                                                                                                                                       │
-                                                          (provision_env failure / launch_training failure short-circuit here too)
+                       intake dispatches on `goal`
+                       ─────────────────────────────────────────────────────────────
+goal=train (default)  →  locate_recipe → configure_algorithm → prepare_data ⇄ generate_preprocess
+                                                                              ↓
+                                  configure_reward → select_compute → provision_env → sanity_rollout → launch_training
+                                                                                                ↓                ↓
+                                                                                       sanity_failed     launch_failed
+                                                                                                ↓                ↓                ▼
+                                                                                                                  monitor_training → summarize → finalize
+
+goal=resume_monitor   →  monitor_training (re-attach to in-flight run; reads existing workspace) → summarize → finalize
+goal=resume_train     →  launch_training (+trainer.resume_mode=auto patched in) → monitor_training → summarize → finalize
+goal=generate         →  (select_compute → provision_env →) run_generate → (chain_eval → run_eval →) finalize
+goal=eval             →  run_eval (no GPU; CPU-only) → finalize
 ```
+
+`configure_algorithm` also halts to `finalize` when the algorithm has no first-class trainer in this verl (dpo / rm). `provision_env` failure → `finalize`. Sanity verdict `fail` → `finalize`. Honesty over heroics.
 
 See `task-overview.md` for the full diagram and the parsing conventions.
 
@@ -37,7 +44,7 @@ verl-harness/
 ├── task-overview.md
 ├── CLAUDE.md               — repo guidance for Claude Code (and other agents)
 ├── states/
-│   ├── intake.md
+│   ├── intake.md                    — dispatches on `goal`: train / resume_monitor / resume_train / generate / eval
 │   ├── locate_recipe.md
 │   ├── configure_algorithm.md       — Phase 2: apply algo_<name> skill, surface algo knobs
 │   ├── prepare_data.md
@@ -45,6 +52,8 @@ verl-harness/
 │   ├── configure_reward.md          — Phase 1: pick reward_kind (rule/model/custom/shaped)
 │   ├── sanity_rollout.md            — Phase 1: load model, run 1 prompt, run reward fn
 │   ├── select_compute.md
+│   ├── run_generate.md              — Phase 3: batch generation (main_generation_server)
+│   ├── run_eval.md                  — Phase 3: offline scoring (main_eval; CPU-only)
 │   ├── provision_env.md
 │   ├── launch_training.md
 │   ├── monitor_training.md
@@ -70,6 +79,8 @@ verl-harness/
 │   ├── algo_sft/           — SFT knobs (packing, chat template, dynamic batch) (Phase 2)
 │   ├── algo_rm/            — RM training (note: not first-class in verl) (Phase 2)
 │   ├── algo_distill/       — on-policy distillation (teacher + distill loss) (Phase 2)
+│   ├── run_generate/       — main_generation_server CLI + pitfalls (Phase 3)
+│   ├── run_eval/           — main_eval CLI + reward fn integration (Phase 3)
 │   ├── builtin-tools/      — FastHarness filesystem/shell/web tools (used by every state)
 │   └── global/             — honesty principle, scope discipline, defaults, state-log contract
 ├── runs/                   — per-execution workspace dirs (gitignored)

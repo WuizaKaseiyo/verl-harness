@@ -57,10 +57,14 @@ When you have a verl checkout, a dataset (named or referenceable by HuggingFace 
 
 ```
 ┌────────────┐
-│   intake   │  parse the user's training intent — algorithm, dataset, model, compute pref,
-│            │  scale knobs, where verl lives, output dir
+│   intake   │  parse intent + dispatch on `goal`:
+│            │    train (default) → locate_recipe
+│            │    resume_monitor  → monitor_training (re-attach to in-flight run)
+│            │    resume_train    → launch_training with +trainer.resume_mode=auto
+│            │    generate        → run_generate (skip locate_recipe / configure_*)
+│            │    eval            → run_eval (no GPU; skip select_compute / provision_env)
 └─────┬──────┘
-      ▼
+      ▼ (goal=train)
 ┌──────────────────┐
 │  locate_recipe   │  find the verl example/recipe script that matches the trainer + model,
 │                  │  or fall back to constructing a launch command from verl.trainer.main_*
@@ -122,6 +126,24 @@ When you have a verl checkout, a dataset (named or referenceable by HuggingFace 
       ▼
 ┌──────────────────┐
 │    finalize      │  terminal — final_report.md + artefact pointers
+└──────────────────┘
+
+(goal=generate / goal=eval — post-train lifecycle tracks, also reachable standalone from intake)
+
+┌──────────────────┐
+│  run_generate    │  batch generation via verl.trainer.main_generation_server.
+│                  │  reads prompts.parquet + checkpoint, writes generations.parquet.
+│                  │  re-uses provision_env's launch_env.sh.
+└─────┬────────────┘
+      ▼ (chain_eval=true) or standalone goal=eval
+┌──────────────────┐
+│  run_eval        │  CPU-only scorer via verl.trainer.main_eval.
+│                  │  reads generations.parquet + reward fn,
+│                  │  emits per-data_source test_score.
+└─────┬────────────┘
+      ▼
+┌──────────────────┐
+│    finalize      │  terminal — eval_report.md / generate_report.md
 └──────────────────┘
 ```
 

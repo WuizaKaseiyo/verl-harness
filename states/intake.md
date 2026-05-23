@@ -8,10 +8,22 @@ Apply the `intake` skill (`skills/intake`).
 
 Concretely:
 
-1. **Collect the intent.** The user typically describes their goal in one or two sentences: *"GRPO on gsm8k with Qwen3-4B on my local 8-GPU box"*, or *"PPO on a custom HF dataset (myorg/mydata) with Qwen2.5-7B on our slurm cluster, 2 nodes × 8 GPU each"*. The intake skill explains the canonical fields the harness needs.
-2. **Resolve `VERL_ROOT`.** The absolute path to the verl checkout. From: (a) the invocation, (b) `VERL_HOME` env var, (c) ask the user. Confirm the path exists and looks like a verl checkout (has `verl/` source, `examples/`, `requirements.txt`).
-3. **Normalise the fields.** Translate the user's prose into a structured training intent:
-   - `algorithm` — the trainer name the user wants. Examples: `ppo`, `grpo`, `gspo`, `dpo`, `dapo`, `rloo`, `remax`, `sft`. The harness does not curate a registry; whatever the user names is what `locate_recipe` will go look for.
+1. **Detect re-attach / resume opportunity** *(before any user input)*. If `runs/` contains a workspace whose `meta.json.status` is `"running"`, OR the user explicitly named an existing run as the target, branch out of the train track:
+   - **`meta.json.status == "running"` + `state_log.md` last entry is `monitor_training`** → the previous session got disconnected mid-poll. Set `goal: resume_monitor` and transition straight to `monitor_training` (it re-reads everything from workspace on each iteration; safe to re-enter cold).
+   - **`meta.json.status ∈ {"crashed", "preempted"}`** AND the user asks to resume → set `goal: resume_train`, read the existing workspace's `recipe.md` + `compute_choice.md` + `launch_env.sh`, transition straight to `launch_training` with the resume-mode CLI patch (see step 3's `resume_mode`).
+   - **Otherwise** → continue with the fresh-train flow below.
+
+   If the user is starting a fresh run rather than re-attaching, also pick the lifecycle goal:
+   - `goal: train` (default — the full train track described in this state's downstream)
+   - `goal: generate` — produce a generations parquet from an existing checkpoint (no training; jumps to `run_generate`)
+   - `goal: eval` — score an existing generations parquet (no training, no GPU; jumps to `run_eval`)
+
+2. **Collect the intent.** The user typically describes their goal in one or two sentences: *"GRPO on gsm8k with Qwen3-4B on my local 8-GPU box"*, or *"PPO on a custom HF dataset (myorg/mydata) with Qwen2.5-7B on our slurm cluster, 2 nodes × 8 GPU each"*. For `goal: generate` or `goal: eval` the intent is shaped differently (checkpoint path + prompts path; or generations path + reward fn). The intake skill explains the canonical fields per goal.
+3. **Resolve `VERL_ROOT`.** The absolute path to the verl checkout. From: (a) the invocation, (b) `VERL_HOME` env var, (c) ask the user. Confirm the path exists and looks like a verl checkout (has `verl/` source, `examples/`, `requirements.txt`).
+4. **Normalise the fields.** Translate the user's prose into a structured training intent:
+   - `goal` — `train` (default) | `resume_monitor` | `resume_train` | `generate` | `eval`. Decides the FSM dispatch in the `## Next States` block.
+   - `resume_mode` — only meaningful when `goal: resume_train`. Values: `auto` (default; verl scans `<output_dir>/checkpoints/` for the latest `global_step_<N>/` and resumes there) or `resume_path` with an explicit `resume_from_path: <ckpt path>`. Mapped to the verl CLI fields `+trainer.resume_mode=...` and `+trainer.resume_from_path=...`.
+   - `algorithm` — the trainer name the user wants. Examples: `ppo`, `grpo`, `gspo`, `dpo`, `dapo`, `rloo`, `remax`, `sft`. The harness does not curate a registry; whatever the user names is what `locate_recipe` will go look for. (Not used for `goal: generate` or `goal: eval` — those are post-train tracks.)
    - `model` — either a HuggingFace model id (e.g. `Qwen/Qwen3-4B`) or an absolute local path. Record which.
    - `dataset` — either a known verl-preprocessable name (`gsm8k`, `math_dataset`, `hellaswag`, `full_hh_rlhf`, `aime2024_multiturn_w_tool`, etc.) or an HF dataset id (`myorg/mydata`) or an absolute path to a parquet directory. The dataset_registry skill (used by `prepare_data`) decides the branch.
    - `compute_pref` — `auto` (let `select_compute` decide), `local-direct`, `local-slurm`, or `ssh-slurm`. If `auto`, leave it; `select_compute` will probe.
@@ -34,11 +46,45 @@ Concretely:
 
 ## Next States
 
+The transition fires per `goal`. Exactly one of the five branches below applies.
+
 ### locate_recipe
 
-**Condition:** `workspace/intake/training_intent.md` exists with all required fields populated (algorithm, model, dataset, compute_pref, output_dir).
+**Condition:** `goal: train` (default). `workspace/intake/training_intent.md` exists with all required fields populated (algorithm, model, dataset, compute_pref, output_dir).
 
 **Deliverables:**
 
-- training_intent: The structured training spec — algorithm, model, dataset, compute_pref, scale knobs, output_dir, wandb config, hf_token-source — written as a key/value markdown document.
+- training_intent: The structured training spec — goal, algorithm, model, dataset, compute_pref, scale knobs, output_dir, wandb config, hf_token-source — written as a key/value markdown document.
 - verl_root: The confirmed absolute path to the verl checkout, recorded both as a field in training_intent.md and on its own at `workspace/intake/verl_root.txt` for downstream states that just need the path.
+
+### monitor_training
+
+**Condition:** `goal: resume_monitor` — detected in step 1 (the previous session disconnected mid-poll; `meta.json.status == "running"` and last `state_log.md` entry is `monitor_training`). The existing workspace is intact; no FSM re-entry needed beyond appending the `state_log.md` line for the re-attach.
+
+**Deliverables:**
+
+- resume_marker: A line in `state_log.md` annotating the re-attach: `- [<ISO8601>] -- re-attached to in-flight monitor_training, jobid=<jobid> --`.
+
+### launch_training
+
+**Condition:** `goal: resume_train` — user explicitly asks to resume a preempted/crashed run from an existing workspace. The harness reads the existing `recipe.md`, `compute_choice.md`, `env_state.md`, `launch_env.sh` AS-IS (no re-decision), and `launch_training` re-assembles the command with `+trainer.resume_mode=<auto|resume_path>` (and `+trainer.resume_from_path=<ckpt>` when applicable) appended.
+
+**Deliverables:**
+
+- resume_intent: A `workspace/intake/resume_intent.md` recording: source run_id, resume_mode (auto / resume_path), resume_from_path (if explicit), and which artefacts from the source workspace will be re-used verbatim.
+
+### run_generate
+
+**Condition:** `goal: generate` — produce a generations parquet from a checkpoint + prompts parquet. No training, no recipe selection. `training_intent.md` carries: `model_path` (the checkpoint to generate from), `prompts_path` (the parquet of prompts), `sampling_params` (n / temperature / top_p / top_k / max_tokens), `output_path` (where to write the generations parquet).
+
+**Deliverables:**
+
+- generate_intent: `training_intent.md` containing only the generate-track fields (`model_path`, `prompts_path`, `sampling_params`, `output_path`, optional `chain_eval: true` to also transition to `run_eval` after).
+
+### run_eval
+
+**Condition:** `goal: eval` — score an existing generations parquet using a reward function. CPU-only; no GPU provisioning. `training_intent.md` carries: `generations_path` (parquet with prompts + responses + ground truth), `reward_fn_path` (Python file with `compute_score`), `reward_fn_name` (default `compute_score`).
+
+**Deliverables:**
+
+- eval_intent: `training_intent.md` containing only the eval-track fields (`generations_path`, `reward_fn_path`, `reward_fn_name`).

@@ -12,6 +12,18 @@ Concretely:
 
    The `sanity_report.md` verdict must be `green` or `warn` before this state can proceed. (`fail` would have short-circuited to `finalize` from `sanity_rollout`.) Sanity has already verified — on the same compute target with the same `launch_env.sh` — that the model loads, the reward fn fires, and the 10-row distribution is non-degenerate.
 2. **Assemble the launch command.** Start from the recipe's launch path, then splice in three sets of overrides:
+
+   **Resume mode patch** — when entering this state with `goal: resume_train` (per `training_intent.md`), append:
+   ```
+   +trainer.resume_mode=<auto|resume_path>
+   ```
+   and, when `resume_mode=resume_path`:
+   ```
+   +trainer.resume_from_path=<ckpt path>
+   ```
+   verl's `_load_checkpoint` (at `verl/trainer/ppo/ray_trainer.py:1004-1029`) handles the rest: `auto` scans `<output_dir>/checkpoints/` for the highest `global_step_<N>/` and resumes there; `resume_path` resumes the exact checkpoint provided. The recipe-side `recipe.md` does not change between an initial run and a resume — only the CLI gets two extra fields appended.
+
+   Then layer in the standard override sets:
    - From `recipe.md` `## Key hyperparameters` (the user's locate_recipe-time overrides).
    - From `dataset.md` (the `data.train_files` / `data.val_files` paths).
    - From `reward_config.md` `## CLI injection` block — exactly as written. Common shapes by `reward_kind`:
