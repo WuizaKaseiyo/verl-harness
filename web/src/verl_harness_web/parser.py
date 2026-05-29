@@ -59,9 +59,18 @@ class Harness:
         return self.root / "runs"
 
     def list_runs(self) -> list[Path]:
+        """List run dirs sorted by mtime ascending (latest last).
+
+        Alphabetical sorting confuses runs that interleave prefixes (e.g.,
+        `harness-e2e-...` vs `harness-smoke-...`) — mtime always wins.
+        """
         if not self.runs_dir.exists():
             return []
-        return sorted([p for p in self.runs_dir.iterdir() if p.is_dir()])
+        runs = [p for p in self.runs_dir.iterdir() if p.is_dir()]
+        try:
+            return sorted(runs, key=lambda p: p.stat().st_mtime)
+        except OSError:
+            return sorted(runs)
 
     def latest_run(self) -> Path | None:
         runs = self.list_runs()
@@ -282,15 +291,105 @@ def read_progress_csv(run: Path) -> dict:
     return {"rows": len(rows), "columns": cols, "series": series}
 
 
+# ---------- stdout metric extractor (verl one-line metric dicts) ----------
+
+# Match each `key:value` segment.
+#   key  = chars in [\w / @ . + -] (covers e.g. `val-aux/chess_fen_cycle/board_score/mean@1`)
+#   val  = bare numeric (-?\d.\d+|e[-+]?\d+) OR np.<dtype>(<numeric>)
+_KV_RE = re.compile(
+    r"(?P<key>[A-Za-z_][\w/.@+\-]*)"
+    r":"
+    r"(?:np\.\w+\((?P<wrapped>[-+0-9.eE]+)\)|(?P<bare>[-+0-9.eE]+))"
+)
+
+# The full metric line starts with `step:N - ` and contains `training/global_step:N`.
+_METRIC_LINE_PRE = re.compile(r"\bstep:\d+\s*-\s")
+_GS_KEY_HINT = "training/global_step"
+
+
+def _scan_stdout_metric_lines(stdout_path: Path) -> list[dict]:
+    """Yield one parsed-row dict per metric line found in the trainer's stdout.
+
+    Each row is a {key: float} dict containing every key:value pair on that line.
+    Only lines that contain BOTH `step:N -` AND `training/global_step` are considered
+    metric lines (this rules out the millions of `Added request <uuid>` and similar).
+    """
+    if not stdout_path.exists():
+        return []
+    rows: list[dict] = []
+    # Stream-read so we don't blow memory on huge slurm .out files.
+    try:
+        with open(stdout_path, "r", encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                if _GS_KEY_HINT not in raw or not _METRIC_LINE_PRE.search(raw):
+                    continue
+                # Strip ray prefix like `(TaskRunner pid=...)` if present.
+                line = raw
+                if "(TaskRunner" in line:
+                    idx = line.find("step:")
+                    if idx >= 0:
+                        line = line[idx:]
+                row: dict[str, float] = {}
+                for m in _KV_RE.finditer(line):
+                    val_str = m.group("wrapped") or m.group("bare")
+                    try:
+                        row[m.group("key")] = float(val_str)
+                    except (TypeError, ValueError):
+                        continue
+                if row.get(_GS_KEY_HINT) is None:
+                    continue
+                rows.append(row)
+    except OSError:
+        return []
+    return rows
+
+
+def read_progress_from_stdout(run: Path) -> dict:
+    """Synthesise a progress payload from the trainer's stdout if a job is in flight.
+
+    Falls back gracefully to {} when job_info.md / stdout_log is missing.
+    """
+    info = read_job_info(run)
+    stdout_p = info.get("stdout_log")
+    if not stdout_p:
+        return {"rows": 0, "columns": [], "series": {}}
+    rows = _scan_stdout_metric_lines(Path(stdout_p))
+    if not rows:
+        return {"rows": 0, "columns": [], "series": {}}
+    cols: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for k in row:
+            if k not in seen:
+                seen.add(k)
+                cols.append(k)
+    # Build series with None for missing keys per row (Chart.js ignores nulls).
+    series: dict[str, list] = {c: [] for c in cols}
+    for row in rows:
+        for c in cols:
+            series[c].append(row.get(c))
+    return {"rows": len(rows), "columns": cols, "series": series}
+
+
+def read_progress(run: Path) -> dict:
+    """Combined progress source — prefer stdout (real-time, multi-row),
+    fall back to progress.csv (only useful when the agent has been writing it)."""
+    via_stdout = read_progress_from_stdout(run)
+    if via_stdout["rows"] > 0:
+        return via_stdout
+    return read_progress_csv(run)
+
+
 _ANOMALY_LINE_RE = re.compile(
     r"^-\s*(?:\[(?P<ts>[^\]]+)\]\s*[—-]\s*)?(?P<body>.+?)\s*$"
 )
 _SEVERITY_PATTERNS = [
     (re.compile(r"\bOOM\b|out of memory", re.I), "critical"),
     (re.compile(r"\bNaN\b|\bInf\b|is nan", re.I), "critical"),
+    (re.compile(r"\bdivergence\b|entropy.?explos|policy diverging", re.I), "critical"),
     (re.compile(r"\bNCCL\b|timeout waiting", re.I), "warning"),
     (re.compile(r"\bvllm\b.*?error", re.I), "warning"),
-    (re.compile(r"preempted|cancelled at", re.I), "warning"),
+    (re.compile(r"val.?regress|preempted|cancelled at", re.I), "warning"),
 ]
 
 
@@ -354,18 +453,42 @@ def read_job_status(run: Path) -> dict:
 
 def read_job_log_tail(run: Path, since_byte: int = 0,
                       max_bytes: int = 200_000) -> dict:
-    """Incrementally read job_log.md from `since_byte`, capped by max_bytes."""
+    """Incrementally read job_log.md from `since_byte`, capped by max_bytes.
+
+    Fall back to the slurm stdout (from job_info.md `stdout_log`) when
+    workspace/logs/job_log.md is missing or empty — useful when an agent isn't
+    actively tailing into the workspace log file (e.g., a 4-day background sbatch).
+    """
     p = run / "workspace" / "logs" / "job_log.md"
-    if not p.exists():
+    if p.exists() and p.stat().st_size > 0:
+        size = p.stat().st_size
+        if since_byte >= size:
+            return {"size": size, "since": since_byte, "content": ""}
+        start = max(since_byte, size - max_bytes)
+        with open(p, "rb") as f:
+            f.seek(start)
+            chunk = f.read(size - start)
+        return {"size": size, "since": start,
+                "content": chunk.decode("utf-8", errors="replace")}
+
+    # Fall back to the slurm stdout the job is actively writing.
+    info = read_job_info(run)
+    stdout_p = info.get("stdout_log")
+    if not stdout_p:
         return {"size": 0, "since": since_byte, "content": ""}
-    size = p.stat().st_size
+    sp = Path(stdout_p)
+    if not sp.exists():
+        return {"size": 0, "since": since_byte, "content": ""}
+    size = sp.stat().st_size
     if since_byte >= size:
         return {"size": size, "since": since_byte, "content": ""}
-    # Cap how much we send in one chunk.
     start = max(since_byte, size - max_bytes)
-    with open(p, "rb") as f:
-        f.seek(start)
-        chunk = f.read(size - start)
+    try:
+        with open(sp, "rb") as f:
+            f.seek(start)
+            chunk = f.read(size - start)
+    except OSError:
+        return {"size": 0, "since": since_byte, "content": ""}
     return {"size": size, "since": start,
             "content": chunk.decode("utf-8", errors="replace")}
 

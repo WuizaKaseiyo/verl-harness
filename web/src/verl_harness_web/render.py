@@ -1,9 +1,54 @@
 """Render helpers — Mermaid FSM graph, compiled markdown views."""
 from __future__ import annotations
 
+import re
+
 from .parser import Harness, State
 
 OVERVIEW_NODE = "__overview__"
+
+# Short error tags for edges that exit to a terminal state. First match wins,
+# so order specific phrases before generic ones.
+_ERROR_TAGS = [
+    ("no first-class trainer", "no trainer"),
+    ("gpu_cap", "over budget"),
+    ("gpu budget", "over budget"),
+    ("provisioning failed", "env failed"),
+    ("sanity", "sanity fail"),
+    ("launch command itself failed", "launch fail"),
+    ("sbatch returned nonzero", "launch fail"),
+    ("preempt", "preempt"),
+    ("crash", "crash"),
+    ("timed out", "crash"),
+    ("unsupported", "halt"),
+    ("fail", "fail"),
+]
+
+
+def _edge_label(source: str, cond: str, target: str, terminals: set[str]) -> tuple[str, bool]:
+    """Return (label, dotted) for a transition.
+
+    Keeps the top-down happy spine UNLABELED (the vertical order is self-evident);
+    puts a short label only where the path genuinely branches — goal choice at
+    intake, the unknown-dataset bounce, and error/halt exits to a terminal state.
+    Error exits are dotted so they recede from the solid happy path.
+    """
+    c = cond.lower()
+    m = re.search(r"goal:\s*([a-z_]+)", c)
+    if m:
+        return m.group(1), False                       # intake fan-out → goal name
+    if target == "generate_preprocess" or "unknown" in c or "hf dataset id" in c:
+        return "unknown data", False                   # dataset bounce
+    if target in terminals:
+        if source == "summarize":
+            return "", False                           # normal end — part of the spine
+        if ("succeed" in c or "is written" in c) and "crash" not in c and "fail" not in c:
+            return "done", True                        # alternate happy end (generate/eval)
+        for kw, tag in _ERROR_TAGS:
+            if kw in c:
+                return tag, True
+        return "halt", True
+    return "", False                                   # forward happy edge — clean spine
 
 
 def harness_to_mermaid(h: Harness) -> str:
@@ -24,22 +69,18 @@ def harness_to_mermaid(h: Harness) -> str:
             label = f"⬛ {name}"
         lines.append(f'  {name}["{label}"]')
 
+    terminals = {n for n, s in h.states.items() if s.is_terminal}
     for name, st in h.states.items():
         for tr in st.transitions:
             cond = (tr.condition or "").split("\n")[0]
-            if len(cond) > 60:
-                cond = cond[:57] + "…"
-            # Mermaid edge-label sanitisation:
-            #   - "  → '   (double quotes close the label)
-            #   - |  → /   (pipe is the label delimiter itself, e.g. `success | crashed`)
-            #   - `  → ''  (backticks confuse Mermaid 11 strict parser)
-            cond = (cond.replace('"', "'")
-                        .replace('|', '/')
-                        .replace('`', ''))
-            if cond:
-                lines.append(f'  {name} -->|"{cond}"| {tr.target}')
+            label, dotted = _edge_label(name, cond, tr.target, terminals)
+            label = label.replace('"', "'").replace('|', '/').replace('`', '')
+            if dotted:
+                lines.append(f'  {name} -.->|"{label}"| {tr.target}' if label
+                             else f'  {name} -.-> {tr.target}')
             else:
-                lines.append(f'  {name} --> {tr.target}')
+                lines.append(f'  {name} -->|"{label}"| {tr.target}' if label
+                             else f'  {name} --> {tr.target}')
 
     # Class defs are applied client-side based on runtime state.
     # Pre-declared here so Mermaid doesn't choke on the classAssignments

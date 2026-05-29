@@ -1,12 +1,15 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>verl-harness · live</title>
+<title>verl harness · training console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<!-- Cormorant Garamond → Copernicus substitute (display serif, weight 400 only).
+     Inter → StyreneB substitute (humanist sans, body + UI).
+     JetBrains Mono → code + terminal. Per Claude design.md (web/DESIGN.md). -->
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css" />
@@ -14,130 +17,140 @@
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/markdown/markdown.js"></script>
 <link rel="stylesheet" href="/static/app.css" />
 </head>
-<body>
+<body data-state="idle" data-view="stream">
 
-<div class="scanlines" aria-hidden="true"></div>
-<div class="grid-bg" aria-hidden="true"></div>
-
-<header class="appbar">
-  <div class="brand">
-    <span class="logo" aria-hidden="true">◢◤</span>
-    <div class="brand-text">
-      <span class="brand-name">verl-harness</span>
-      <span class="brand-sub">training control</span>
-    </div>
+<!-- ─────────────────── MASTHEAD ─────────────────── -->
+<header class="masthead">
+  <div class="masthead-mark">
+    <span class="mark-spike" aria-hidden="true">✶</span>
+    <span class="mark-name">verl <em>harness</em></span>
+    <span class="mark-sep">·</span>
+    <span class="mark-sub">training console</span>
   </div>
-  <div class="harness-id">
-    <span class="harness-title" id="harness-title">Loading…</span>
-    <span class="harness-sub" id="harness-sub"></span>
-  </div>
-  <div class="appbar-right">
-    <span class="run-badge" id="run-badge" data-status="idle">
-      <span class="run-dot"></span>
-      <span class="run-label">idle</span>
-    </span>
-    <span class="mode-chip" id="mode-chip">live</span>
-    <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme">☼</button>
+  <div class="masthead-run">
+    <span class="run-prefix">RUN</span>
+    <span class="run-id" id="masthead-run">— no run on record —</span>
   </div>
 </header>
 
-<main class="layout">
-  <!-- ============================== LEFT COLUMN ============================== -->
-  <section class="col col-left">
-    <div class="card card-graph" id="card-graph">
-      <div class="card-head">
-        <h2><span class="head-tag">[01]</span> Workflow</h2>
-        <span class="card-hint">Tap a state to inspect</span>
-      </div>
-      <div class="card-body graph-body" id="graph-wrap">
-        <div id="graph"></div>
-      </div>
-      <div class="zoom-ctl">
-        <button class="zoom-btn" id="zoom-out" aria-label="Zoom out">−</button>
-        <span class="zoom-level" id="zoom-level" title="Reset">100%</span>
-        <button class="zoom-btn" id="zoom-in" aria-label="Zoom in">+</button>
-      </div>
+<!-- ─────────────────── BANNER ─────────────────── -->
+<section class="banner">
+  <span class="banner-num" id="banner-num">№ —</span>
+  <span class="banner-eyebrow">presently</span>
+  <h1 class="banner-name" id="banner-name"><em>idle</em></h1>
+
+  <div class="banner-meta">
+    <div class="meta-cell">
+      <span class="meta-label">elapsed</span>
+      <span class="meta-value" id="meta-elapsed">—</span>
     </div>
-
-    <div class="card card-skills" id="card-skills">
-      <div class="card-head">
-        <h2><span class="head-tag">[02]</span> Skills</h2>
-        <span class="card-hint" id="skills-hint"></span>
-      </div>
-      <div class="card-body" id="skills-tree"></div>
+    <div class="meta-cell">
+      <span class="meta-label">step</span>
+      <span class="meta-value" id="meta-step">—</span>
     </div>
-  </section>
+    <div class="meta-cell">
+      <span class="meta-label">job</span>
+      <span class="meta-value" id="meta-job">—</span>
+    </div>
+    <div class="meta-cell">
+      <span class="meta-label">last signal</span>
+      <span class="meta-value">
+        <span class="signal-dot" id="signal-dot"></span>
+        <em class="signal-age" id="meta-since">awaiting</em>
+      </span>
+    </div>
+  </div>
+</section>
 
-  <!-- ============================== RIGHT COLUMN ============================== -->
-  <section class="col col-right">
+<!-- ─────────────────── TABS ─────────────────── -->
+<nav class="tabs" aria-label="View switcher">
+  <button class="tab" data-view="stream"><span class="tab-num">i.</span> stream</button>
+  <button class="tab" data-view="metrics"><span class="tab-num">ii.</span> metrics</button>
+  <button class="tab" data-view="map"><span class="tab-num">iii.</span> map</button>
+  <button class="tab" data-view="spec"><span class="tab-num">iv.</span> spec</button>
+  <span class="tabs-spacer"></span>
+  <span class="tabs-meta" id="tabs-meta"><em>—</em></span>
+</nav>
 
-    <!-- Top — context-aware: training panels when a run is active and we're past launch_training -->
-    <div class="card card-context" id="card-context">
-      <div class="card-head">
-        <h2><span class="head-tag" id="ctx-tag">[03]</span> <span id="ctx-title">Inspector</span></h2>
-        <div class="detail-actions">
+<!-- ─────────────────── READER ─────────────────── -->
+<main class="reader">
+
+  <!-- view: STREAM -->
+  <article class="view" data-view="stream">
+    <pre class="stream" id="stream"></pre>
+  </article>
+
+  <!-- view: METRICS — wandb-style panel grid grouped by namespace -->
+  <article class="view" data-view="metrics" hidden>
+    <div class="metrics-controls">
+      <span class="metrics-meta" id="metrics-meta"><em>—</em></span>
+      <span class="metrics-spacer"></span>
+      <label class="metrics-knob">
+        <span class="knob-label">smooth</span>
+        <input type="range" id="smooth-slider" min="0" max="95" value="0" step="5">
+        <span class="knob-value" id="smooth-value">0%</span>
+      </label>
+      <label class="metrics-knob">
+        <span class="knob-label">x-axis</span>
+        <select id="x-axis-select">
+          <option value="training/global_step">step</option>
+          <option value="training/epoch">epoch</option>
+          <option value="_index">row index</option>
+        </select>
+      </label>
+    </div>
+    <div class="panel-grid" id="panel-grid">
+      <div class="empty" id="metrics-empty"><em>awaiting first metric dict from the trainer</em></div>
+    </div>
+    <section class="anomalies-strip" id="anomalies-strip"></section>
+  </article>
+
+  <!-- view: MAP -->
+  <article class="view" data-view="map" hidden>
+    <div class="map-controls">
+      <span class="map-track-label" id="map-track-label"><em>—</em></span>
+      <span class="map-spacer"></span>
+      <label class="map-mode-select">
+        <span class="knob-label">view</span>
+        <select id="map-mode">
+          <option value="phase" selected>phases · 5</option>
+          <option value="stage">stages · 13</option>
+          <option value="all">all · 15</option>
+        </select>
+      </label>
+      <button class="quiet-btn" id="zoom-out">−</button>
+      <span id="zoom-level">100</span>
+      <button class="quiet-btn" id="zoom-in">+</button>
+    </div>
+    <div class="map-wrap"><div id="graph"></div></div>
+  </article>
+
+  <!-- view: SPEC -->
+  <article class="view spec-view" data-view="spec" hidden>
+    <aside class="spec-nav" id="spec-nav"></aside>
+    <section class="spec-body">
+      <header class="spec-head">
+        <h2 class="spec-title" id="spec-title"><em>spec</em></h2>
+        <div class="spec-actions">
           <span class="save-status" id="save-status"></span>
-          <button class="ghost-btn" id="cancel-btn" hidden>Cancel</button>
-          <button class="primary-btn" id="save-btn" hidden>Save</button>
-          <button class="ghost-btn" id="edit-btn" hidden>
-            <span aria-hidden="true">✎</span> Edit
-          </button>
+          <button class="quiet-btn" id="cancel-btn" hidden>cancel</button>
+          <button class="quiet-btn primary" id="save-btn" hidden>save</button>
+          <button class="quiet-btn" id="edit-btn" hidden>edit ✎</button>
         </div>
+      </header>
+      <div class="markdown" id="rendered">
+        <p class="empty-prose"><em>pick a state or skill from the index on the left</em></p>
       </div>
-      <div class="card-body" id="context-body">
-        <div class="markdown" id="rendered">
-          <p class="empty-hint">Pick a state, skill, or the workflow overview on the left.</p>
-        </div>
-        <div id="editor-host" hidden></div>
-      </div>
-    </div>
+      <div id="editor-host" hidden></div>
+    </section>
+  </article>
 
-    <!-- Live training panels — visible whenever a run exists, even if idle -->
-    <div class="training-panels" id="training-panels" hidden>
-      <div class="card card-job" id="card-job">
-        <div class="card-head">
-          <h2><span class="head-tag">[04]</span> Job</h2>
-          <span class="card-hint" id="job-hint"></span>
-        </div>
-        <div class="card-body job-body" id="job-body">
-          <div class="empty-hint">No job info yet.</div>
-        </div>
-      </div>
-
-      <div class="card card-progress" id="card-progress">
-        <div class="card-head">
-          <h2><span class="head-tag">[05]</span> Progress</h2>
-          <span class="card-hint" id="progress-hint">loss · reward · kl</span>
-        </div>
-        <div class="card-body chart-body">
-          <canvas id="chart-progress"></canvas>
-          <div class="empty-hint" id="progress-empty" hidden>No progress.csv yet — training has not started.</div>
-        </div>
-      </div>
-
-      <div class="card card-anomalies" id="card-anomalies">
-        <div class="card-head">
-          <h2><span class="head-tag">[06]</span> Anomalies</h2>
-          <span class="card-hint" id="anomalies-hint"></span>
-        </div>
-        <div class="card-body anomalies-body" id="anomalies-body">
-          <div class="empty-hint">No anomalies detected.</div>
-        </div>
-      </div>
-
-      <div class="card card-logs" id="card-logs">
-        <div class="card-head">
-          <h2><span class="head-tag">[07]</span> Log tail</h2>
-          <span class="card-hint" id="logs-hint">workspace/logs/job_log.md</span>
-        </div>
-        <div class="card-body logs-body">
-          <pre id="log-tail" class="log-tail"></pre>
-        </div>
-      </div>
-    </div>
-
-  </section>
 </main>
+
+<!-- subtle marginalia: vertical edition strip -->
+<aside class="marginalia" aria-hidden="true">
+  <span class="margin-label">live</span>
+</aside>
 
 <div class="toast" id="toast" hidden></div>
 

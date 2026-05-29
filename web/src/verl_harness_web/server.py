@@ -22,7 +22,7 @@ from starlette.staticfiles import StaticFiles
 
 from .parser import (parse_harness, parse_state_log, read_anomalies,
                      read_job_info, read_job_log_tail, read_job_status,
-                     read_progress_csv, read_summary)
+                     read_progress, read_progress_csv, read_summary)
 from .render import (OVERVIEW_NODE, compile_overview, compile_skill_folder,
                      compile_state, harness_to_mermaid)
 
@@ -186,7 +186,8 @@ def create_app(harness_root: Path, live: bool = True) -> Starlette:
         run = h.latest_run()
         if run is None:
             return JSONResponse({"rows": 0, "columns": [], "series": {}})
-        return JSONResponse(read_progress_csv(run))
+        # Prefer stdout-derived (live, multi-row) over the static csv
+        return JSONResponse(read_progress(run))
 
     async def api_anomalies(_: Request):
         h = parse_harness(harness_root)

@@ -1,63 +1,143 @@
-/* verl-harness-web — dashboard logic.
-   Mirrors fastharness-web's structure (no SPA framework) but adds the
-   training-specific panels: progress chart, anomalies, log tail, job card. */
+/* verl harness · editorial specimen dashboard.
+   Same backend API; new front shell — masthead + banner + tabs + reader. */
 
 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs';
 
-const $ = (s) => document.querySelector(s);
-const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn); };
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => (
-  {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
-));
+const $  = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+const on = (el, ev, fn) => el && el.addEventListener(ev, fn);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 const S = {
   config: { live: true },
   harness: null,
   run: null,
-  current: null,        // { kind, id, editPath }
-  expanded: new Set(),
-  skillFiles: {},
+  view: 'stream',
+  current: null,
   activeStateSkills: new Set(),
-  editing: false,
-  renderSeq: 0,
   zoom: 1,
-  chart: null,
+  charts: {},                        // panel-name → Chart instance (c)
   logOffset: 0,
+  lastEventTs: Date.now(),
+  startTs: null,
+  runOrdinal: null,
+  smoothing: 0,                      // 0..0.95 EMA factor (c)
+  xAxisKey: 'training/global_step',  // (c)
+  mapMode: 'phase',                  // 'phase' (5 nodes, default) | 'stage' (FSM for goal) | 'all' (15)
+  goal: 'train',                     // (a) derived from training_intent.md
 };
 
-const isDark = () => document.documentElement.dataset.theme !== 'light';
+/* ─── (a) per-goal state set used by map filter ──────────────────────────── */
+const TRACK_STATES = {
+  train: ['intake', 'locate_recipe', 'configure_algorithm', 'prepare_data',
+          'generate_preprocess', 'configure_reward', 'select_compute',
+          'provision_env', 'sanity_rollout', 'launch_training',
+          'monitor_training', 'summarize', 'finalize'],
+  resume_monitor: ['intake', 'monitor_training', 'summarize', 'finalize'],
+  resume_train:   ['intake', 'launch_training', 'monitor_training', 'summarize', 'finalize'],
+  generate:       ['intake', 'select_compute', 'provision_env', 'run_generate', 'finalize'],
+  eval:           ['intake', 'run_eval', 'finalize'],
+};
 
-/* ---------- Mermaid theme ---------- */
-function initMermaid() {
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'loose',
-    theme: 'base',
-    flowchart: { useMaxWidth: false, htmlLabels: true, curve: 'basis' },
-    fontFamily: "'JetBrains Mono', monospace",
-    themeVariables: {
-      fontFamily: "'JetBrains Mono', monospace",
-      fontSize: '12px',
-      background: 'transparent',
-      primaryColor: '#131a37',
-      primaryBorderColor: '#2c3a70',
-      primaryTextColor: '#e6ecff',
-      lineColor: '#2c3a70',
-      defaultLinkColor: '#2c3a70',
-    },
+/* ─── (a2) phase view — collapses the 13-state FSM into 5 user-visible phases.
+   When mapMode === 'phase' the graph renders these as 5 nodes (the default).
+   A phase's status aggregates from its members: any live → live; if all visited
+   → visited; if it contains a terminal that's reached → terminal. Click → first
+   member's spec. Goals other than `train` are too small to collapse — they just
+   fall back to the goal-filtered FSM. */
+const PHASES = {
+  train: [
+    { id: 'intent',   label: 'Intent',   members: ['intake'] },
+    { id: 'setup',    label: 'Setup',    members: ['locate_recipe', 'configure_algorithm',
+                                                   'prepare_data', 'generate_preprocess',
+                                                   'configure_reward'] },
+    { id: 'compute',  label: 'Compute',  members: ['select_compute', 'provision_env', 'sanity_rollout'] },
+    { id: 'train',    label: 'Train',    members: ['launch_training', 'monitor_training'] },
+    { id: 'report',   label: 'Report',   members: ['summarize'] },
+    { id: 'done',     label: 'Done',     members: ['finalize'] },
+  ],
+};
+
+/* ─── (c) namespace groups for panel grid ─────────────────────────────────── */
+const NS_GROUPS = [
+  { name: 'training',       match: k => k.startsWith('training/') },
+  { name: 'actor · loss',   match: k => /^actor\/(loss|pg_loss|kl_loss|entropy|grad_norm|ppo_kl|kl_coef|pg_clipfrac|lr)\b/.test(k) },
+  { name: 'actor · perf',   match: k => k.startsWith('actor/perf/') },
+  { name: 'critic',         match: k => k.startsWith('critic/') },
+  { name: 'val · core',     match: k => k.startsWith('val-core/') },
+  { name: 'val · aux',      match: k => k.startsWith('val-aux/') },
+  { name: 'response / prompt', match: k => /^(response_length|response|prompt_length)\//.test(k) },
+  { name: 'reward',         match: k => k.startsWith('reward/') || /^critic\/(score|rewards|advantages|returns)/.test(k) },
+  { name: 'timing',         match: k => k.startsWith('timing_s/') || k.startsWith('timing_per_token_ms/') },
+  { name: 'perf',           match: k => k.startsWith('perf/') && !k.startsWith('actor/perf/') },
+  { name: 'turns / seqlen', match: k => k.startsWith('num_turns/') || k.startsWith('global_seqlen/') },
+];
+
+/* line colors for series within one panel — Claude design.md palette
+   (coral primary, teal/amber accents, coral-active, ink, muted, semantic).
+   Stays inside the cream+coral+dark-navy trinity; no purple, no saturated blue. */
+const SERIES_PALETTE = [
+  '#cc785c',  /* primary (coral)        */
+  '#5db8a6',  /* accent-teal            */
+  '#e8a55a',  /* accent-amber           */
+  '#a9583e',  /* primary-active         */
+  '#141413',  /* ink                    */
+  '#5db872',  /* success                */
+  '#6c6a64',  /* muted                  */
+  '#c64545',  /* error                  */
+];
+
+/* ════════════════════════════ boot ════════════════════════════ */
+async function boot() {
+  try { S.config = await getJSON('/api/config'); }
+  catch { $('#masthead-run').textContent = '— api unreachable —'; return; }
+
+  initMermaid();
+
+  await reloadHarness();
+  await loadRunOrdinal();
+  await reloadRun();
+  await renderGraph();
+  renderSpecNav();
+  paintBanner();
+
+  $$('.tab[data-view]').forEach(btn =>
+    on(btn, 'click', () => setView(btn.dataset.view)));
+
+  on($('#edit-btn'),  'click', openEditor);
+  on($('#save-btn'),  'click', saveEdit);
+  on($('#cancel-btn'),'click', () => { exitEditor(); reselect(); });
+  on($('#zoom-in'),  'click', () => { S.zoom = Math.min(S.zoom + 0.1, 2.0); applyZoom(); });
+  on($('#zoom-out'), 'click', () => { S.zoom = Math.max(S.zoom - 0.1, 0.5); applyZoom(); });
+  on($('#zoom-level'), 'click', () => { S.zoom = 1.0; applyZoom(); });
+
+  // (c) metrics controls
+  on($('#smooth-slider'), 'input', (e) => {
+    S.smoothing = Number(e.target.value) / 100;
+    $('#smooth-value').textContent = `${e.target.value}%`;
+    if (S.view === 'metrics') refreshMetrics();
   });
+  on($('#x-axis-select'), 'change', (e) => {
+    S.xAxisKey = e.target.value;
+    if (S.view === 'metrics') refreshMetrics();
+  });
+
+  // (a) map mode selector — 3-state: phase (5) / stage (FSM for goal) / all (15)
+  on($('#map-mode'), 'change', (e) => {
+    S.mapMode = e.target.value;
+    if (S.view === 'map') renderGraph();
+  });
+
+  setView('stream');
+
+  if (S.config.live) connectSSE();
+  setInterval(tick, 1000);
+  setInterval(refreshAll, S.config.live ? 5000 : 10000);
+  refreshAll();
 }
 
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  localStorage.setItem('vh-theme', theme);
-  const btn = $('#theme-btn');
-  if (btn) btn.textContent = theme === 'light' ? '☾' : '☼';
-  if (S.harness) renderGraph();
-  if (S.chart) styleChart();
-}
-
-/* ---------- API helpers ---------- */
+/* ════════════════════════════ API helpers ════════════════════════════ */
 async function getJSON(p) {
   const r = await fetch(p);
   if (!r.ok) throw new Error(`${p} → ${r.status}`);
@@ -74,70 +154,27 @@ async function putJSON(p, body) {
   return d;
 }
 
-/* ---------- toast ---------- */
-let toastTimer;
-function toast(msg, kind = '') {
-  const t = $('#toast');
-  t.textContent = msg;
-  t.className = `toast show ${kind}`;
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.className = 'toast'; }, 2400);
-}
+/* ════════════════════════════ harness + run ════════════════════════════ */
+async function reloadHarness() { S.harness = await getJSON('/api/harness'); }
 
-/* ============================================================
-   BOOT
-   ============================================================ */
-async function boot() {
+async function loadRunOrdinal() {
+  /* count total runs and find this run's 1-based index — for the N° label. */
   try {
-    S.config = await getJSON('/api/config');
-  } catch (e) {
-    $('#harness-title').textContent = 'API unreachable';
-    return;
-  }
-  $('#mode-chip').textContent = S.config.live ? 'live' : 'static';
-
-  applyTheme(localStorage.getItem('vh-theme') || 'dark');
-  initMermaid();
-
-  await reloadHarness();
-  await reloadRun();
-  await renderGraph();
-  renderSkills();
-  selectOverview();
-
-  initZoom();
-  if (S.config.live) connectSSE();
-
-  on('#theme-btn', 'click', () => applyTheme(isDark() ? 'light' : 'dark'));
-  on('#edit-btn',  'click', openEditor);
-  on('#save-btn',  'click', saveEdit);
-  on('#cancel-btn','click', () => { exitEditor(); reselect(); });
-
-  // Periodic training-panel refresh — keeps the chart, log tail, anomalies fresh
-  setInterval(refreshTrainingPanels, S.config.live ? 5000 : 10000);
-  refreshTrainingPanels();
-}
-
-/* ---------- load harness + run ---------- */
-async function reloadHarness() {
-  S.harness = await getJSON('/api/harness');
-  $('#harness-title').textContent = S.harness.title;
-  const cap = (S.harness.required_capabilities || []).length;
-  $('#harness-sub').textContent =
-    `${S.harness.state_count} states · ${cap} capabilities · HITL ${S.harness.hitl || '—'}`;
+    const data = await getJSON('/api/runs');
+    const runs = data.runs || [];
+    S.runOrdinal = runs.length;     // latest run = total number
+  } catch { S.runOrdinal = null; }
 }
 
 async function reloadRun() {
   try { S.run = await getJSON('/api/run'); }
   catch { S.run = { run_id: null, status: 'idle', entries: [], current: null }; }
-  const badge = $('#run-badge');
-  const status = S.run.status || 'idle';
-  badge.dataset.status = status;
-  badge.querySelector('.run-label').textContent = status;
+  const startedRaw = S.run?.meta?.started_at;
+  S.startTs = startedRaw ? new Date(startedRaw).getTime() : null;
   S.activeStateSkills = new Set();
-  if (S.run.current && S.harness && S.harness.mermaid) {
-    // Find the state's skills from the parsed harness — fetch the state.
+  // (a) derive run goal — best effort, defaults to 'train'
+  S.goal = S.run?.meta?.goal || 'train';
+  if (S.run.current) {
     try {
       const stateData = await getJSON(`/api/state/${S.run.current}`);
       (stateData.skills || []).forEach(s => S.activeStateSkills.add(s));
@@ -145,45 +182,500 @@ async function reloadRun() {
   }
 }
 
-/* ============================================================
-   GRAPH (Mermaid)
-   ============================================================ */
+/* ════════════════════════════ BANNER painter ════════════════════════════ */
+function paintBanner() {
+  const status = (S.run?.status || 'idle').toLowerCase();
+  document.body.dataset.state = status;
+
+  const runId = S.run?.run_id || '— no run on record —';
+  $('#masthead-run').textContent = runId;
+
+  // banner number: roman-numeral-flavored
+  const num = S.runOrdinal != null
+    ? `№ ${String(S.runOrdinal).padStart(3, '0')}`
+    : '№ —';
+  $('#banner-num').textContent = num;
+
+  // banner name = current state (if running) or status word
+  const banner = $('#banner-name');
+  const cur = S.run?.current;
+  banner.innerHTML = cur ? `<em>${esc(cur)}</em>` : `<em>${esc(status)}</em>`;
+
+  // tabs meta — a small italic note
+  const meta = $('#tabs-meta');
+  if (S.run?.meta?.purpose) {
+    meta.innerHTML = `<em>${esc(S.run.meta.purpose.split('.')[0])}</em>`;
+  } else if (S.harness) {
+    meta.innerHTML = `<em>${S.harness.state_count} states · ${S.harness.skills?.length || 0} skills</em>`;
+  }
+}
+
+function tick() {
+  if (S.startTs) {
+    const ms = Date.now() - S.startTs;
+    $('#meta-elapsed').textContent = fmtDuration(ms);
+  } else {
+    $('#meta-elapsed').textContent = '—';
+  }
+  const age = Math.floor((Date.now() - S.lastEventTs) / 1000);
+  const ageEl = $('#meta-since');
+  ageEl.textContent = fmtAge(age) + ' ago';
+}
+function fmtDuration(ms) {
+  if (!isFinite(ms) || ms < 0) return '—';
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (h) return `${h}h ${String(m).padStart(2,'0')}m`;
+  if (m) return `${m}m ${String(ss).padStart(2,'0')}s`;
+  return `${ss}s`;
+}
+function fmtAge(s) {
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s/60)} m`;
+  return `${Math.floor(s/3600)} h`;
+}
+function pulseSignal() {
+  S.lastEventTs = Date.now();
+  const dot = $('#signal-dot');
+  if (!dot) return;
+  dot.classList.remove('beating');
+  void dot.offsetWidth;
+  dot.classList.add('beating');
+}
+
+/* ════════════════════════════ view switcher ════════════════════════════ */
+function setView(name) {
+  S.view = name;
+  document.body.dataset.view = name;
+  $$('.tab[data-view]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === name);
+  });
+  $$('.view').forEach(v => { v.hidden = (v.dataset.view !== name); });
+  if (name === 'map')     renderGraph();
+  if (name === 'spec')    selectOverview();
+  if (name === 'metrics') refreshMetrics();
+}
+
+/* ════════════════════════════ STREAM ════════════════════════════ */
+async function refreshStream() {
+  try {
+    const data = await getJSON(`/api/logs?since=${S.logOffset}`);
+    if (data.size === undefined) return;
+    if (data.size < S.logOffset) S.logOffset = 0;
+    if (data.content) appendStream(data.content);
+    S.logOffset = data.size;
+  } catch (_) {}
+}
+function appendStream(chunk) {
+  const pre = $('#stream');
+  const wasAtBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+  const lines = chunk.split('\n').map(line => {
+    let cls = 'log-line-new';
+    if (/error|cuda out of memory|nan|inf|traceback|failed/i.test(line)) cls += ' log-line-error';
+    else if (/warn|preempt|timeout/i.test(line)) cls += ' log-line-warn';
+    else if (/training\/global_step|^step:|Training Progress:/i.test(line)) cls += ' log-line-step';
+    else if (/Final validation metrics:|saved|checkpoint/i.test(line)) cls += ' log-line-ok';
+    return `<span class="${cls}">${esc(line)}</span>`;
+  });
+  pre.insertAdjacentHTML('beforeend', lines.join('\n'));
+  setTimeout(() => pre.querySelectorAll('.log-line-new').forEach(e =>
+    e.classList.remove('log-line-new')), 820);
+  if (pre.innerHTML.length > 400_000) pre.innerHTML = pre.innerHTML.slice(-200_000);
+  if (wasAtBottom) pre.scrollTop = pre.scrollHeight;
+}
+
+/* ════════════════════════════ METRICS — panel grid ════════════════════════════ */
+async function refreshMetrics() {
+  try {
+    const data = await getJSON('/api/progress');
+    renderPanelGrid(data);
+  } catch (_) {}
+  try {
+    const a = await getJSON('/api/anomalies');
+    renderAnomalies(a.anomalies || []);
+  } catch (_) {}
+}
+
+/* EMA smoothing of a numeric series; alpha=0 means raw. */
+function ema(ys, alpha) {
+  if (!alpha || alpha <= 0) return ys;
+  const out = [];
+  let s = NaN;
+  for (const y of ys) {
+    if (typeof y !== 'number' || !isFinite(y)) { out.push(y); continue; }
+    s = isFinite(s) ? (alpha * s + (1 - alpha) * y) : y;
+    out.push(s);
+  }
+  return out;
+}
+
+function renderPanelGrid(data) {
+  const grid = $('#panel-grid');
+  const empty = !data || !data.rows || !data.columns?.length;
+  const emptyEl = $('#metrics-empty');
+
+  $('#metrics-meta').innerHTML = empty ? '<em>no metric rows yet</em>'
+    : `<em>${data.rows} row${data.rows>1?'s':''} · ${data.columns.length} fields</em>`;
+
+  if (empty) {
+    // teardown
+    for (const k of Object.keys(S.charts)) { S.charts[k].destroy(); }
+    S.charts = {};
+    grid.innerHTML = '<div class="empty" id="metrics-empty"><em>awaiting first metric dict from the trainer</em></div>';
+    return;
+  }
+  if (emptyEl) emptyEl.remove();
+
+  const cols = data.columns;
+  // x-axis values + the step display in pulse banner
+  let xs;
+  const xKey = S.xAxisKey;
+  if (xKey === '_index' || !cols.includes(xKey)) {
+    xs = (data.series[cols[0]] || []).map((_, i) => i);
+  } else {
+    xs = data.series[xKey].map(v => typeof v === 'number' ? v : null);
+  }
+  // also push step into the banner cell
+  const gs = data.series['training/global_step'];
+  if (gs && gs.length) {
+    const last = gs[gs.length - 1];
+    if (last !== undefined && last !== null) $('#meta-step').textContent = String(last);
+  }
+
+  // determine groups present in this data
+  const used = new Set();
+  const groupsToShow = [];
+  for (const grp of NS_GROUPS) {
+    const keys = cols.filter(c => grp.match(c) && !used.has(c));
+    // only keep numeric series with at least one finite value
+    const numericKeys = keys.filter(k => (data.series[k] || []).some(v => typeof v === 'number' && isFinite(v)));
+    if (numericKeys.length === 0) continue;
+    numericKeys.forEach(k => used.add(k));
+    groupsToShow.push({ name: grp.name, keys: numericKeys });
+  }
+
+  // diff: remove panels no longer present
+  const wantNames = new Set(groupsToShow.map(g => g.name));
+  for (const name of Object.keys(S.charts)) {
+    if (!wantNames.has(name)) {
+      S.charts[name].destroy();
+      delete S.charts[name];
+      const el = grid.querySelector(`[data-panel="${cssEsc(name)}"]`);
+      if (el) el.remove();
+    }
+  }
+
+  // create/update panels
+  for (const grp of groupsToShow) {
+    let panel = grid.querySelector(`[data-panel="${cssEsc(grp.name)}"]`);
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.className = 'metric-panel';
+      panel.dataset.panel = grp.name;
+      panel.innerHTML = `
+        <div class="metric-panel-head">
+          <div class="metric-panel-title">${esc(grp.name)}</div>
+          <div class="metric-panel-meta">${grp.keys.length} series</div>
+        </div>
+        <div class="metric-panel-canvas"><canvas></canvas></div>
+        <div class="metric-panel-legend"></div>`;
+      grid.appendChild(panel);
+    } else {
+      panel.querySelector('.metric-panel-meta').textContent = `${grp.keys.length} series`;
+    }
+
+    const datasets = grp.keys.map((k, i) => {
+      const ys = ema(data.series[k] || [], S.smoothing);
+      const color = SERIES_PALETTE[i % SERIES_PALETTE.length];
+      return {
+        label: shortLabel(k, grp.name),
+        data: xs.map((x, idx) => ({ x, y: ys[idx] })),
+        borderColor: color,
+        backgroundColor: color + '14',
+        borderWidth: 1.2,
+        tension: 0.18,
+        pointRadius: data.rows < 10 ? 2 : 0,
+        pointHoverRadius: 4,
+        _fullKey: k,
+      };
+    });
+
+    const canvas = panel.querySelector('canvas');
+    const cfg = panelChartConfig(datasets, xKey === '_index' ? 'row' : xKey);
+    if (S.charts[grp.name]) {
+      S.charts[grp.name].data = cfg.data;
+      S.charts[grp.name].options = cfg.options;
+      S.charts[grp.name].update('none');
+    } else {
+      S.charts[grp.name] = new Chart(canvas, cfg);
+    }
+
+    // legend below canvas
+    const legend = panel.querySelector('.metric-panel-legend');
+    legend.innerHTML = datasets.map(ds => `
+      <span class="metric-panel-legend-item" title="${esc(ds._fullKey)}">
+        <span class="metric-panel-legend-swatch" style="background:${ds.borderColor}"></span>
+        ${esc(ds.label)}
+      </span>`).join('');
+  }
+}
+
+/* shorten "actor/perf/max_memory_allocated_gb" → "max_memory_allocated_gb"
+   for legend readability; full path on hover via title=. */
+function shortLabel(key, groupName) {
+  // drop the first slug if it equals the group name's first word
+  const head = groupName.split(/\s*[·/]\s*/)[0];        // e.g. "actor" from "actor · loss"
+  if (head && key.startsWith(head + '/')) return key.slice(head.length + 1);
+  return key;
+}
+
+function cssEsc(s) { return s.replace(/[^\w]/g, '\\$&'); }
+
+function panelChartConfig(datasets, xLabel) {
+  // Claude design.md tokens — kept in sync with app.css :root vars.
+  const tick = '#6c6a64';                                         /* --muted     */
+  const grid = '#ebe6df';                                         /* --hairline-soft */
+  const tickFont = { family: "'JetBrains Mono', monospace", size: 10 };
+  return {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { type: 'linear',
+             title: { display: true, text: xLabel, color: tick, font: tickFont, padding: { top: 2 } },
+             ticks: { color: tick, font: tickFont, maxTicksLimit: 6 },
+             grid: { color: grid, drawBorder: false, lineWidth: 0.5 } },
+        y: { type: 'linear',
+             ticks: { color: tick, font: tickFont, maxTicksLimit: 5 },
+             grid: { color: grid, drawBorder: false, lineWidth: 0.5 } },
+      },
+      plugins: {
+        legend: { display: false },        // custom legend rendered separately
+        tooltip: {
+          backgroundColor: '#181715',                              /* --surface-dark */
+          borderColor: '#252320',                                  /* --surface-dark-elevated */
+          borderWidth: 1,
+          titleColor: '#faf9f5',                                   /* --on-dark   */
+          bodyColor:  '#a09d96',                                   /* --on-dark-soft */
+          titleFont: { family: "'JetBrains Mono', monospace", size: 11 },
+          bodyFont:  { family: "'JetBrains Mono', monospace", size: 11 },
+          padding: 10,
+          cornerRadius: 8,                                         /* --r-md      */
+          callbacks: {
+            label(ctx) {
+              const v = ctx.parsed.y;
+              const str = (typeof v === 'number' && isFinite(v))
+                ? (Math.abs(v) >= 1e4 || (Math.abs(v) > 0 && Math.abs(v) < 1e-3) ? v.toExponential(3) : v.toPrecision(5))
+                : '—';
+              return `${ctx.dataset._fullKey || ctx.dataset.label}: ${str}`;
+            },
+          },
+        },
+      },
+    },
+  };
+}
+function renderAnomalies(rows) {
+  const wrap = $('#anomalies-strip');
+  if (!rows.length) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = rows.slice(-20).reverse().map(r => `
+    <div class="anomaly-row sev-${esc(r.severity)}">
+      <span class="ts">${esc(r.timestamp || '—')}</span>
+      <span class="sev">${esc(r.severity)}</span>
+      <span class="body">${esc(r.body)}</span>
+    </div>`).join('');
+}
+
+/* ════════════════════════════ JOB ════════════════════════════ */
+async function refreshJob() {
+  try {
+    const data = await getJSON('/api/job');
+    const info = data.info || {};
+    const status = data.status || {};
+    const job = info.slurm_jobid || info.pid || '—';
+    $('#meta-job').textContent = job;
+    if (status.final_step) $('#meta-step').textContent = `${status.final_step}`;
+  } catch (_) {}
+}
+
+/* ════════════════════════════ MAP / mermaid ════════════════════════════ */
+function initMermaid() {
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'loose',
+    theme: 'base',
+    flowchart: { useMaxWidth: false, htmlLabels: true, curve: 'basis' },
+    fontFamily: "'Inter', sans-serif",
+    themeVariables: {
+      // Claude design.md tokens (kept in sync with app.css :root vars)
+      fontFamily: "'Inter', sans-serif",
+      fontSize: '12px',
+      background: 'transparent',
+      primaryColor: '#efe9de',        // --surface-card (default node fill)
+      primaryBorderColor: '#6c6a64',  // --muted (default node stroke)
+      primaryTextColor: '#141413',    // --ink
+      lineColor: '#8e8b82',           // --muted-soft (edges)
+      mainBkg: '#efe9de',
+      nodeBorder: '#6c6a64',
+      edgeLabelBackground: '#faf9f5', // --canvas
+    },
+  });
+}
+/* (a) Synthesize a 5-node phase-view mermaid graph for goal=train. Each phase
+       aggregates several FSM states; its status is derived from its members.
+       Click a phase → spec view jumps to the first member state. */
+function synthesizePhaseMermaid() {
+  const phases = PHASES.train;
+  const lines = ['flowchart TD'];
+  // node decls — use a slab label so they read like UI tiles
+  for (const p of phases) lines.push(`  ${p.id}["${p.label}"]`);
+  // linear edges, unlabelled — the order itself is self-evident
+  for (let i = 0; i < phases.length - 1; i++) {
+    lines.push(`  ${phases[i].id} --> ${phases[i+1].id}`);
+  }
+  return lines.join('\n');
+}
+
+/* (a) filter mermaid source down to states relevant for the active goal,
+       unless mode === 'all'. */
+function filterMermaidByTrack(src) {
+  if (S.mapMode === 'all') return src;
+  const keep = new Set(TRACK_STATES[S.goal] || TRACK_STATES.train);
+  keep.add(S.harness?.overview_node);
+  // Plus always include any state actually visited this run (defensive — covers
+  // cross-track entries like resume_train hitting monitor_training).
+  (S.run?.visited || []).forEach(s => keep.add(s));
+  if (S.run?.current) keep.add(S.run.current);
+
+  const lines = src.split('\n');
+  const out = [];
+  // first line is `flowchart TD`
+  out.push(lines[0]);
+  // simple line regexes
+  const NODE_RE = /^\s*(\w+)\["?[^"]*"?\]/;
+  const EDGE_RE = /^\s*(\w+)\s*-->.*?\|\s*(\w+)$|^\s*(\w+)\s*--\.[^.]*\.->\s*(\w+)$|^\s*(\w+)\s*-->\s*(\w+)\s*$/;
+  for (let i = 1; i < lines.length; i++) {
+    const ln = lines[i];
+    if (!ln.trim()) continue;
+    const node = ln.match(NODE_RE);
+    if (node) {
+      if (keep.has(node[1])) out.push(ln);
+      continue;
+    }
+    // edge: extract both endpoints
+    const e1 = ln.match(/^\s*(\w+)\s*(?:-->|-\.-?>|-{2,}>?)\|?[^|]*\|?\s*(\w+)\s*$/);
+    if (e1) {
+      const [, a, b] = e1;
+      if (keep.has(a) && keep.has(b)) out.push(ln);
+      continue;
+    }
+    // edge with label `a -->|"label"| b`
+    const e2 = ln.match(/^\s*(\w+)\s*-->\|[^|]*\|\s*(\w+)\s*$/);
+    if (e2) {
+      const [, a, b] = e2;
+      if (keep.has(a) && keep.has(b)) out.push(ln);
+      continue;
+    }
+    // edge `__overview__ -.start.-> intake`
+    const e3 = ln.match(/^\s*(\w+)\s*-\.[^.]+\.->\s*(\w+)\s*$/);
+    if (e3) {
+      const [, a, b] = e3;
+      if (keep.has(a) && keep.has(b)) out.push(ln);
+      continue;
+    }
+    // anything else (classDef etc.) — keep
+    out.push(ln);
+  }
+  return out.join('\n');
+}
+
 async function renderGraph() {
   if (!S.harness) return;
-  let src = S.harness.mermaid;
-
-  // Append classDef assignments based on runtime state.
   const visited = new Set(S.run?.visited || []);
   const current = S.run?.current;
   const terminals = new Set(S.harness.terminal_states || []);
-  const overview = S.harness.overview_node;
 
+  // ── PHASE MODE (default): synthesize 5 nodes, aggregate status from members ──
+  // Only available for the standard train goal; the smaller resume/generate/eval
+  // tracks already have ≤5 states so they fall through to stage mode.
+  const canPhase = S.mapMode === 'phase' && S.goal === 'train' && PHASES.train;
+  if (canPhase) {
+    const phases = PHASES.train;
+    let src = synthesizePhaseMermaid();
+    const classes = [];
+    for (const p of phases) {
+      const mems = p.members;
+      const live   = mems.some(m => m === current);
+      const allVis = mems.every(m => visited.has(m));
+      const anyVis = mems.some(m => visited.has(m));
+      const isTerm = mems.some(m => terminals.has(m));
+      if      (live)             classes.push(`class ${p.id} fhLive`);
+      else if (isTerm && anyVis) classes.push(`class ${p.id} fhTerminal`);
+      else if (allVis)           classes.push(`class ${p.id} fhVisited`);
+      // partial visit shows default cream — honest about "in progress"
+    }
+    src = src + '\n' + classes.join('\n');
+
+    const trackLbl = $('#map-track-label');
+    if (trackLbl) trackLbl.innerHTML = `<em>phases</em> · 5 · <span style="color:var(--muted-soft)">${PHASES.train.flatMap(p=>p.members).length} states</span>`;
+
+    try {
+      const { svg } = await mermaid.render(`g${Date.now()}`, src);
+      const wrap = $('#graph');
+      wrap.innerHTML = svg;
+      wrap.querySelectorAll('.node').forEach(n => {
+        const id = n.id?.replace(/^flowchart-/, '').split('-')[0];
+        const phase = phases.find(p => p.id === id);
+        if (phase) {
+          n.addEventListener('click', () => {
+            // jump to the first member; user can navigate from there in spec nav
+            setView('spec'); selectState(phase.members[0]);
+          });
+        }
+      });
+      applyZoom();
+    } catch (e) {
+      $('#graph').textContent = 'mermaid render failed';
+      console.error(e);
+    }
+    return;
+  }
+
+  // ── STAGE / ALL MODE: existing per-state FSM render ──────────────────────────
+  let src = filterMermaidByTrack(S.harness.mermaid);
+  const trackLbl = $('#map-track-label');
+  if (trackLbl) {
+    const visibleCount = (TRACK_STATES[S.goal] || []).length;
+    trackLbl.innerHTML = S.mapMode === 'all'
+      ? `<em>all states</em> · 15`
+      : `track <em>${esc(S.goal)}</em> · ${visibleCount} states`;
+  }
+  const overview = S.harness.overview_node;
   const classes = [];
   if (overview) classes.push(`class ${overview} fhOverview`);
   for (const name of S.harness.states) {
     if (name === current) classes.push(`class ${name} fhLive`);
-    else if (S.current?.kind === 'state' && S.current?.id === name)
-      classes.push(`class ${name} fhSel`);
+    else if (S.current?.kind === 'state' && S.current?.id === name) classes.push(`class ${name} fhSel`);
     else if (visited.has(name)) classes.push(`class ${name} fhVisited`);
     else if (terminals.has(name)) classes.push(`class ${name} fhTerminal`);
   }
   src = src + '\n' + classes.join('\n');
-
-  const seq = ++S.renderSeq;
   try {
     const { svg } = await mermaid.render(`g${Date.now()}`, src);
-    if (seq !== S.renderSeq) return;
     const wrap = $('#graph');
     wrap.innerHTML = svg;
-    // Click handlers
     wrap.querySelectorAll('.node').forEach(n => {
       const id = n.id?.replace(/^flowchart-/, '').split('-')[0];
-      if (id) {
-        n.addEventListener('click', () => {
-          if (id === S.harness.overview_node) selectOverview();
-          else selectState(id);
-        });
-      }
+      if (id) n.addEventListener('click', () => {
+        if (id === S.harness.overview_node) { setView('spec'); selectOverview(); }
+        else { setView('spec'); selectState(id); }
+      });
     });
     applyZoom();
   } catch (e) {
@@ -191,81 +683,82 @@ async function renderGraph() {
     console.error(e);
   }
 }
-
-/* ============================================================
-   SKILLS PANEL
-   ============================================================ */
-function renderSkills() {
-  if (!S.harness) return;
-  const wrap = $('#skills-tree');
-  wrap.innerHTML = '';
-  const skills = S.harness.skills || [];
-  $('#skills-hint').textContent = `${skills.length} folders`;
-  if (skills.length === 0) {
-    wrap.innerHTML = '<div class="empty-hint">No skill folders.</div>';
-    return;
-  }
-  for (const path of skills) {
-    const row = document.createElement('div');
-    row.className = 'skill-row';
-    if (S.activeStateSkills.has(path)) row.classList.add('in-active-state');
-    if (S.current?.kind === 'skill' && S.current?.id === path) row.classList.add('active');
-    row.innerHTML = `
-      <span class="skill-name">${esc(path)}</span>
-      <span class="skill-files">→</span>`;
-    row.addEventListener('click', () => selectSkill(path));
-    wrap.appendChild(row);
-  }
+function applyZoom() {
+  const g = $('#graph');
+  if (g) g.style.transform = `scale(${S.zoom})`;
+  const lvl = $('#zoom-level');
+  if (lvl) lvl.textContent = `${Math.round(S.zoom * 100)}`;
 }
 
-/* ============================================================
-   DETAIL / INSPECTOR
-   ============================================================ */
+/* ════════════════════════════ SPEC nav + inspector ════════════════════════════ */
+function renderSpecNav() {
+  if (!S.harness) return;
+  const wrap = $('#spec-nav');
+  if (!wrap) return;
+  const states = S.harness.states || [];
+  const skills = S.harness.skills || [];
+  const html = [];
+  html.push(`<div class="spec-nav-group">overview</div>`);
+  html.push(`<div class="spec-nav-row" data-kind="overview" data-id="${esc(S.harness.overview_node)}">task-overview.md</div>`);
+  html.push(`<div class="spec-nav-group">states · ${states.length}</div>`);
+  for (const name of states) {
+    const live = (name === S.run?.current) ? ' <span class="row-sub">live</span>' : '';
+    html.push(`<div class="spec-nav-row" data-kind="state" data-id="${esc(name)}">${esc(name)}${live}</div>`);
+  }
+  html.push(`<div class="spec-nav-group">skills · ${skills.length}</div>`);
+  for (const path of skills) {
+    const used = S.activeStateSkills.has(path) ? ' <span class="row-sub">·</span>' : '';
+    html.push(`<div class="spec-nav-row" data-kind="skill" data-id="${esc(path)}">${esc(path)}${used}</div>`);
+  }
+  wrap.innerHTML = html.join('');
+  wrap.querySelectorAll('.spec-nav-row').forEach(row =>
+    row.addEventListener('click', () => {
+      const { kind, id } = row.dataset;
+      if (kind === 'overview') selectOverview();
+      else if (kind === 'state') selectState(id);
+      else if (kind === 'skill') selectSkill(id);
+    }));
+  paintSpecNavActive();
+}
+function paintSpecNavActive() {
+  $$('.spec-nav-row').forEach(r => {
+    const k = r.dataset.kind, i = r.dataset.id;
+    r.classList.toggle('active',
+      S.current && S.current.kind === k && S.current.id === i);
+  });
+}
 async function selectOverview() {
-  S.current = { kind: 'overview', id: S.harness?.overview_node, editPath: 'task-overview.md' };
+  S.current = { kind: 'overview', id: S.harness.overview_node, editPath: 'task-overview.md' };
   exitEditor();
   const data = await getJSON(`/api/state/${S.harness.overview_node}`);
-  renderDetail('Overview', S.harness.title, data.compiled, data.editable, data.file);
-  await renderGraph();
-  renderSkills();
+  paintInspector('overview', S.harness.title, data.compiled, data.editable, data.file);
+  paintSpecNavActive();
 }
-
 async function selectState(name) {
   S.current = { kind: 'state', id: name, editPath: `states/${name}.md` };
   exitEditor();
   const data = await getJSON(`/api/state/${name}`);
   S.activeStateSkills = new Set(data.skills || []);
-  renderDetail(data.is_terminal ? 'Terminal state' : 'State',
-               name, data.compiled, data.editable, data.file);
-  await renderGraph();
-  renderSkills();
+  paintInspector(data.is_terminal ? 'terminal state' : 'state', name, data.compiled, data.editable, data.file);
+  paintSpecNavActive();
 }
-
 async function selectSkill(path) {
   S.current = { kind: 'skill', id: path };
   exitEditor();
   const data = await getJSON(`/api/skill?path=${encodeURIComponent(path)}`);
-  const subtitle = data.used_by?.length ?
-    `used by ${data.used_by.join(', ')}` : 'unused';
-  renderDetail(`Skill · ${subtitle}`, path, data.compiled, false, null);
-  renderSkills();
+  paintInspector('skill', path, data.compiled, false, null);
+  paintSpecNavActive();
 }
-
-function renderDetail(eyebrow, title, markdownText, editable, file) {
-  $('#ctx-tag').textContent = '[03]';
-  $('#ctx-title').textContent = title || 'Inspector';
+function paintInspector(eyebrow, title, md, editable, file) {
+  $('#spec-title').innerHTML = `${esc(eyebrow)} <em>${esc(title || '')}</em>`;
   const rendered = $('#rendered');
-  rendered.innerHTML = marked.parse(markdownText || '');
+  rendered.innerHTML = marked.parse(md || '');
   rendered.hidden = false;
   $('#editor-host').hidden = true;
   const eb = $('#edit-btn');
-  if (editable && file) {
-    eb.hidden = false; eb.dataset.path = file;
-  } else {
-    eb.hidden = true; delete eb.dataset.path;
-  }
+  if (editable && file) { eb.hidden = false; eb.dataset.path = file; }
+  else { eb.hidden = true; delete eb.dataset.path; }
 }
-
 function reselect() {
   if (!S.current) return;
   if (S.current.kind === 'overview') selectOverview();
@@ -273,7 +766,7 @@ function reselect() {
   else if (S.current.kind === 'skill') selectSkill(S.current.id);
 }
 
-/* ---------- editor ---------- */
+/* ════════════════════════════ editor ════════════════════════════ */
 let cm = null;
 async function openEditor() {
   const path = $('#edit-btn').dataset.path;
@@ -288,325 +781,65 @@ async function openEditor() {
   host.hidden = false;
   host.innerHTML = '<textarea></textarea>';
   cm = CodeMirror.fromTextArea(host.querySelector('textarea'), {
-    mode: 'markdown',
-    lineNumbers: true,
-    lineWrapping: true,
-    indentUnit: 2,
-    tabSize: 2,
+    mode: 'markdown', lineNumbers: true, lineWrapping: true,
+    indentUnit: 2, tabSize: 2,
   });
   cm.setValue(data.content || '');
   cm.on('change', () => {
-    $('#save-status').textContent = '● unsaved';
+    $('#save-status').textContent = '— unsaved';
     $('#save-status').className = 'save-status dirty';
   });
-  S.editing = true;
 }
-
 async function saveEdit() {
   const path = $('#edit-btn').dataset.path;
   if (!path || !cm) return;
   try {
     await putJSON('/api/file', { path, content: cm.getValue() });
-    $('#save-status').textContent = '✓ saved';
+    $('#save-status').textContent = 'saved';
     $('#save-status').className = 'save-status saved';
     toast('saved');
-  } catch (e) {
-    toast(e.message, 'err');
-  }
+  } catch (e) { toast(e.message, 'err'); }
 }
-
 function exitEditor() {
-  S.editing = false;
   $('#save-btn').hidden = true;
   $('#cancel-btn').hidden = true;
   const eb = $('#edit-btn');
   if (eb.dataset.path) eb.hidden = false;
-  const host = $('#editor-host');
-  host.hidden = true;
-  host.innerHTML = '';
+  $('#editor-host').hidden = true;
+  $('#editor-host').innerHTML = '';
   $('#rendered').hidden = false;
   cm = null;
 }
 
-/* ============================================================
-   TRAINING PANELS — progress chart, anomalies, job card, log tail
-   ============================================================ */
-async function refreshTrainingPanels() {
-  if (!S.harness) return;
-  // Show the panels whenever a run exists (even if idle), so the
-  // user can browse a finished run's chart + summary.
-  const hasRun = !!S.run?.run_id;
-  $('#training-panels').hidden = !hasRun;
-  if (!hasRun) return;
-
-  const [progress, anomalies, job] = await Promise.allSettled([
-    getJSON('/api/progress'),
-    getJSON('/api/anomalies'),
-    getJSON('/api/job'),
-  ]);
-
-  if (progress.status === 'fulfilled') renderProgress(progress.value);
-  if (anomalies.status === 'fulfilled') renderAnomalies(anomalies.value.anomalies || []);
-  if (job.status === 'fulfilled') renderJob(job.value);
-
-  await refreshLogTail();
+/* ════════════════════════════ toast ════════════════════════════ */
+let toastTimer;
+function toast(msg, kind = '') {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = `toast show ${kind}`;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = 'toast'; t.hidden = true; }, 2400);
 }
 
-/* ---------- progress chart ---------- */
-const SERIES_META = [
-  { key: 'mean_ep_return_100', label: 'mean_ep_return_100', color: '#aaff00' },
-  { key: 'reward',             label: 'reward',             color: '#aaff00' },
-  { key: 'train_loss',         label: 'train_loss',         color: '#00e5ff' },
-  { key: 'loss',               label: 'loss',               color: '#00e5ff' },
-  { key: 'policy_entropy',     label: 'policy_entropy',     color: '#9b5dff' },
-  { key: 'kl',                 label: 'kl',                 color: '#ff2a87' },
-  { key: 'entropy_coef',       label: 'entropy_coef',       color: '#ffb20a' },
-];
-
-function renderProgress(data) {
-  const empty = !data || !data.rows || !data.columns?.length;
-  $('#progress-empty').hidden = !empty;
-  const canvas = $('#chart-progress');
-  $('#progress-hint').textContent = empty ? 'no data' :
-    `${data.rows} rows · ${data.columns.length} cols`;
-  if (empty) {
-    if (S.chart) { S.chart.destroy(); S.chart = null; }
-    canvas.style.display = 'none';
-    return;
-  }
-  canvas.style.display = '';
-  // Pick an x-axis: prefer `env_steps`, fall back to step / update / row index.
-  const cols = data.columns;
-  const xCol = cols.find(c => /env_steps|^step$|update/i.test(c));
-  const xs = xCol ? data.series[xCol] : data.series[cols[0]].map((_, i) => i);
-
-  // Choose series that have a non-trivial numeric range.
-  const datasets = [];
-  for (const meta of SERIES_META) {
-    if (!cols.includes(meta.key)) continue;
-    const ys = data.series[meta.key];
-    if (!ys || !ys.length) continue;
-    if (!ys.some(v => typeof v === 'number' && isFinite(v))) continue;
-    datasets.push({
-      label: meta.label,
-      data: xs.map((x, i) => ({ x, y: ys[i] })),
-      borderColor: meta.color,
-      backgroundColor: hexToRgba(meta.color, 0.15),
-      borderWidth: 1.6,
-      tension: 0.25,
-      pointRadius: 0,
-      pointHoverRadius: 4,
-      yAxisID: /loss|kl|entropy_coef/.test(meta.key) ? 'yRight' : 'yLeft',
-    });
-  }
-
-  if (datasets.length === 0) {
-    if (S.chart) { S.chart.destroy(); S.chart = null; }
-    $('#progress-empty').hidden = false;
-    $('#progress-empty').textContent = 'progress.csv has rows but no plottable numeric series.';
-    canvas.style.display = 'none';
-    return;
-  }
-
-  const cfg = chartConfig(xCol || 'index', datasets);
-  if (S.chart) {
-    S.chart.data = cfg.data;
-    S.chart.options = cfg.options;
-    S.chart.update('none');
-  } else {
-    S.chart = new Chart(canvas, cfg);
-  }
-}
-
-function chartConfig(xLabel, datasets) {
-  const dark = isDark();
-  const grid = dark ? 'rgba(44, 58, 112, 0.4)' : 'rgba(204, 213, 236, 0.7)';
-  const tick = dark ? '#adb6d8' : '#5d6a93';
-  return {
-    type: 'line',
-    data: { datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      scales: {
-        x: {
-          type: 'linear',
-          title: { display: true, text: xLabel, color: tick, font: { family: "'JetBrains Mono', monospace", size: 10 } },
-          ticks: { color: tick, font: { family: "'JetBrains Mono', monospace", size: 10 } },
-          grid:  { color: grid, drawBorder: false },
-        },
-        yLeft: {
-          type: 'linear', position: 'left',
-          ticks: { color: tick, font: { family: "'JetBrains Mono', monospace", size: 10 } },
-          grid:  { color: grid, drawBorder: false },
-          title: { display: true, text: 'reward / return', color: '#aaff00',
-                   font: { family: "'JetBrains Mono', monospace", size: 10 } },
-        },
-        yRight: {
-          type: 'linear', position: 'right',
-          ticks: { color: tick, font: { family: "'JetBrains Mono', monospace", size: 10 } },
-          grid:  { drawOnChartArea: false },
-          title: { display: true, text: 'loss / kl / coef', color: '#00e5ff',
-                   font: { family: "'JetBrains Mono', monospace", size: 10 } },
-        },
-      },
-      plugins: {
-        legend: {
-          labels: { color: tick, font: { family: "'JetBrains Mono', monospace", size: 11 },
-                    usePointStyle: true, pointStyle: 'rectRounded', padding: 14 },
-        },
-        tooltip: {
-          backgroundColor: dark ? '#0c1126' : '#ffffff',
-          borderColor: '#2c3a70',
-          borderWidth: 1,
-          titleColor: '#00e5ff',
-          bodyColor: dark ? '#e6ecff' : '#0a1233',
-          titleFont: { family: "'JetBrains Mono', monospace", size: 11 },
-          bodyFont:  { family: "'JetBrains Mono', monospace", size: 11 },
-        },
-      },
-    },
-  };
-}
-
-function styleChart() {
-  if (!S.chart) return;
-  const cfg = chartConfig(S.chart.options.scales.x.title.text, S.chart.data.datasets);
-  S.chart.options = cfg.options;
-  S.chart.update('none');
-}
-
-function hexToRgba(hex, a) {
-  const m = hex.replace('#', '').match(/.{2}/g);
-  if (!m) return hex;
-  const [r, g, b] = m.map(x => parseInt(x, 16));
-  return `rgba(${r}, ${g}, ${b}, ${a})`;
-}
-
-/* ---------- anomalies ---------- */
-function renderAnomalies(rows) {
-  const wrap = $('#anomalies-body');
-  $('#anomalies-hint').textContent =
-    rows.length ? `${rows.length} entries` : '';
-  if (!rows.length) {
-    wrap.innerHTML = '<div class="empty-hint">No anomalies detected.</div>';
-    return;
-  }
-  wrap.innerHTML = rows.map(r => `
-    <div class="anomaly-row sev-${esc(r.severity)}">
-      <span class="anomaly-ts">${esc(r.timestamp || '—')}</span>
-      <span class="anomaly-body">${esc(r.body)}</span>
-    </div>
-  `).join('');
-}
-
-/* ---------- job card ---------- */
-function renderJob(data) {
-  const info = data.info || {};
-  const status = data.status || {};
-  const wrap = $('#job-body');
-  const empty = !Object.keys(info).length && !Object.keys(status).length;
-  $('#job-hint').textContent = status.status ? `→ ${status.status}` :
-                              (info.target || '');
-  if (empty) {
-    wrap.innerHTML = '<div class="empty-hint">No job info yet.</div>';
-    return;
-  }
-  const cells = [];
-  const statusCls = status.status ? `status-${(status.status).toLowerCase()}` : '';
-  if (status.status) cells.push(['status', status.status, statusCls]);
-  if (info.target) cells.push(['target', info.target]);
-  if (info.pid)            cells.push(['pid', info.pid]);
-  if (info.slurm_jobid)    cells.push(['slurm jobid', info.slurm_jobid]);
-  if (info.remote_alias)   cells.push(['remote', info.remote_alias]);
-  if (info.started_at)     cells.push(['started', info.started_at]);
-  if (status.final_step)   cells.push(['final step', status.final_step]);
-  if (status.final_epoch)  cells.push(['final epoch', status.final_epoch]);
-  if (status.final_loss)   cells.push(['final loss', status.final_loss]);
-  if (status.final_reward) cells.push(['final reward', status.final_reward]);
-  if (status.last_checkpoint) cells.push(['last ckpt', status.last_checkpoint]);
-  if (info.output_dir)     cells.push(['output dir', info.output_dir]);
-
-  wrap.innerHTML = cells.map(([k, v, cls]) => `
-    <div class="job-cell ${cls || ''}">
-      <span class="job-key">${esc(k)}</span>
-      <span class="job-val">${esc(v)}</span>
-    </div>
-  `).join('');
-}
-
-/* ---------- log tail ---------- */
-async function refreshLogTail() {
-  try {
-    const data = await getJSON(`/api/logs?since=${S.logOffset}`);
-    if (data.size === undefined) return;
-    if (data.size < S.logOffset) S.logOffset = 0;       // file truncated
-    if (data.content) {
-      appendLog(data.content);
-    }
-    S.logOffset = data.size;
-    $('#logs-hint').textContent = `${humanBytes(data.size)} · offset ${S.logOffset}`;
-  } catch (_) {}
-}
-
-function appendLog(chunk) {
-  const pre = $('#log-tail');
-  const lines = chunk.split('\n').map(line => {
-    let cls = '';
-    if (/error|cuda out of memory|nan|inf|traceback/i.test(line)) cls = 'log-line-error';
-    else if (/warn|preempt|timeout/i.test(line)) cls = 'log-line-warn';
-    else if (/^step:\s*\d+|^update=\d+|env_steps?=/.test(line)) cls = 'log-line-step';
-    else if (/training (finished|complete)|saved/i.test(line)) cls = 'log-line-ok';
-    return cls ? `<span class="${cls}">${esc(line)}</span>` : esc(line);
-  });
-  pre.insertAdjacentHTML('beforeend', lines.join('\n'));
-  // Cap rendered output at ~400 KB
-  if (pre.innerHTML.length > 400_000) {
-    pre.innerHTML = pre.innerHTML.slice(-200_000);
-  }
-  pre.scrollTop = pre.scrollHeight;
-}
-
-function humanBytes(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n/1024).toFixed(1)} KB`;
-  return `${(n/1024/1024).toFixed(2)} MB`;
-}
-
-/* ============================================================
-   SSE
-   ============================================================ */
+/* ════════════════════════════ SSE ════════════════════════════ */
 function connectSSE() {
   const es = new EventSource('/events');
-  es.addEventListener('changed', async () => {
-    await reloadRun();
-    await renderGraph();
-    renderSkills();
-    refreshTrainingPanels();
-  });
-  es.addEventListener('error', () => {
-    // Soft reconnect after a backoff
-    setTimeout(connectSSE, 3000);
-    es.close();
-  });
+  es.addEventListener('hello',   () => pulseSignal());
+  es.addEventListener('changed', async () => { pulseSignal(); await refreshAll(); });
+  es.addEventListener('error',   () => { setTimeout(connectSSE, 3000); es.close(); });
 }
 
-/* ============================================================
-   Zoom
-   ============================================================ */
-function applyZoom() {
-  const g = $('#graph');
-  if (g) g.style.transform = `scale(${S.zoom})`;
-  $('#zoom-level').textContent = `${Math.round(S.zoom * 100)}%`;
-}
-function initZoom() {
-  on('#zoom-in',  'click', () => { S.zoom = Math.min(S.zoom + 0.1, 2.0); applyZoom(); });
-  on('#zoom-out', 'click', () => { S.zoom = Math.max(S.zoom - 0.1, 0.5); applyZoom(); });
-  on('#zoom-level', 'click', () => { S.zoom = 1.0; applyZoom(); });
+/* ════════════════════════════ refresh aggregator ════════════════════════════ */
+async function refreshAll() {
+  await reloadRun();
+  paintBanner();
+  await refreshJob();
+  await refreshStream();
+  if (S.view === 'metrics') await refreshMetrics();
+  if (S.view === 'map')     await renderGraph();
+  if (S.view === 'spec')    renderSpecNav();
 }
 
-/* ============================================================
-   GO
-   ============================================================ */
+/* ════════════════════════════ go ════════════════════════════ */
 boot();
