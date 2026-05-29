@@ -28,8 +28,8 @@ Concretely:
   - Training-time log — `workspace/logs/job_log.md`
   - Progress CSV — `workspace/logs/progress.csv`
   - Anomalies — `workspace/logs/anomalies.md` (if any)
-  - Final checkpoint — `<output_dir>/checkpoints/global_step_<N>/` (resolved path)
-  - Best checkpoint — `<output_dir>/checkpoints/global_step_<best_N>/` (the one to hand downstream)
+  - Final checkpoint — `<output_dir>/global_step_<N>/` (resolved path)
+  - Best checkpoint — `<output_dir>/global_step_<best_N>/` (the one to hand downstream)
   - Final wandb run url — if configured
   - Recipe used — `workspace/recipe/recipe.md`
   - Prepared dataset — `workspace/dataset/dataset.md`

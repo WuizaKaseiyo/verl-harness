@@ -33,6 +33,20 @@ GRPO has the same KL-in-reward vs KL-loss choice as PPO. Same rule: pick one.
 ### GRPO-passk variant
 `adv_estimator=grpo_passk` — advantage = `pass@k` indicator across the group. Useful for code / math tasks where partial correctness signals are weak and you want a binary "did any of the n samples solve it" signal back-propagated.
 
+### Policy-loss-mode variants (GSPO / CISPO / GMPO / SAPO / DPPO)
+
+These keep `adv_estimator=grpo` (so **all the group knobs above still apply**) and only swap the **policy loss objective** via `actor_rollout_ref.actor.policy_loss.loss_mode` (the second algorithm axis — `@register_policy_loss` in `verl/trainer/ppo/core_algos.py`). They are *not* separate advantage estimators. Read the exact `loss_mode` (and its extra knobs) from the matched `examples/<name>_trainer/run_*.sh`; the registry is the validity check.
+
+| User name | `policy_loss.loss_mode` | Extra knobs | One-line intent |
+|---|---|---|---|
+| `gspo` | `gspo` | — | Group Sequence PO — sequence-level (not token-level) importance ratio; steadier for long responses / MoE (Qwen). |
+| `cispo` | `cispo` | — | Clipped-IS PO — clips the importance-sampling weight rather than the ratio (MiniMax M1). |
+| `gmpo` | `geo_mean` | — | Geometric-Mean PO — geometric- instead of arithmetic-mean over tokens; robust to outlier tokens. |
+| `sapo` | `sapo` | `actor.tau_pos`, `actor.tau_neg` (NOT under `policy_loss.*`) | Asymmetric clipping with separate positive/negative temperatures. |
+| `dppo` | `dppo_tv` *or* `dppo_kl` | — | Decoupled PPO — TV- or KL-regularised; read which from the recipe. |
+
+Other registered modes (`clip_cov`, `kl_cov`, `bypass_mode`) are research/diagnostic and pass through the same way. `vanilla` is the GRPO default and needs no `loss_mode` on the CLI.
+
 ## Failure modes
 
 - **Group-reward variance collapses.** All `n` samples in a group score the same → group std = 0 → if `norm_adv_by_std_in_grpo=True` and the divide-by-zero is unguarded, you get NaN advantages. verl guards this with an epsilon, but the signal is also gone. Either lower temperature (more deterministic samples for harder prompts → more useful variance), or **switch `norm_adv_by_std_in_grpo=False`** (Dr.GRPO style) which avoids the division entirely.
@@ -55,6 +69,16 @@ actor_rollout_ref.actor.entropy_coeff=0.0
 actor_rollout_ref.actor.use_kl_loss=True
 actor_rollout_ref.actor.kl_loss_coef=0.001
 actor_rollout_ref.actor.kl_loss_type=low_var_kl
+# loss-mode variants only (omit for vanilla GRPO):
+# actor_rollout_ref.actor.policy_loss.loss_mode=gspo|cispo|geo_mean|sapo|dppo_tv|dppo_kl
+# actor_rollout_ref.actor.tau_pos=...   actor_rollout_ref.actor.tau_neg=...   # sapo only
+# WARNING: verl's own examples/sapo_trainer/*.sh write `+actor.policy_loss.tau_pos=...`
+# That path is WRONG on this verl: `tau_pos`/`tau_neg` are fields of ActorConfig, NOT
+# PolicyLossConfig (verified at verl/workers/config/actor.py:158-159 for ActorConfig vs.
+# 78-100 for PolicyLossConfig — PolicyLossConfig has no tau_* fields, and Hydra reports
+# `TypeError: PolicyLossConfig.__init__() got an unexpected keyword argument 'tau_pos'`).
+# Use `actor_rollout_ref.actor.tau_pos=` (no `policy_loss.` infix) regardless of what the
+# example script shows.
 ```
 
 ## Things you must not do

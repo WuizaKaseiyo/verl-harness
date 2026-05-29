@@ -75,7 +75,7 @@ For slurm targets, collect:
 | `--time`           | `slurm.time_limit`; else recipe estimate + 50% safety margin            |
 | `--nodes`          | `nodes` from intent (or recipe default)                                 |
 | `--ntasks-per-node`| 1 (Ray's head + worker model — one srun per node)                       |
-| `--gpus-per-node`  | `gpus_per_node`                                                         |
+| `--gpus-per-node`  | `N_rec` from the `skills/gpu_budget` estimate (model-size-aware, capped by `scale.gpu_cap`) — **not** a blind `gpus_per_node` guess; an explicit user value overrides but warn if below `N_min` |
 | `--cpus-per-task`  | partition default × `gpus_per_node` / 8; recommend at least 8 × G       |
 | `--mem`            | partition default; recommend ≥ 200 GB for 8-GPU training nodes          |
 | `--output`         | `<output_dir>/slurm-%j.out`                                             |

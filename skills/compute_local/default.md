@@ -132,7 +132,7 @@ Polling cadence: **30 seconds**.
 Each poll:
 
 - `kill -0 "$(cat workspace/job/pid)" 2>/dev/null` — alive check. If returns 0, process still running.
-- If dead, read `workspace/job/exit_code` (the launch script writes it on exit). If exit code is 0 and `<output_dir>/checkpoints/` is non-empty → success. If nonzero → crash.
+- If dead, read `workspace/job/exit_code` (the launch script writes it on exit). If exit code is 0 and `<output_dir>/` has a `global_step_<N>/` dir (or, when `save_freq=-1`, stdout shows verl's `Final validation metrics:` marker) → success. If nonzero → crash.
 - Tail new bytes from stdout / stderr logs, append to `workspace/logs/job_log.md`.
 
 OOM detection — the kernel may have OOM-killed the process: check `dmesg | tail -50 | grep -i "killed process"`. Record matches.

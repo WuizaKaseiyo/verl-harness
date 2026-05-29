@@ -16,7 +16,7 @@ Concretely:
    - **cancelled:** the cancellation report.
 3. **Compute the training-curve summary.** Read `workspace/logs/progress.csv`. Compute first-step / last-step / mid-training values for loss, reward, throughput. If wandb is configured and the run url was logged, record it.
 4. **Resolve the final and best checkpoints.**
-   - **Final** — list the highest-step checkpoint directory in `<output_dir>/checkpoints/` and its disk size. For preempted: the last completed checkpoint (the basis for a resume). For crashed: the last checkpoint, if any, even if it's an early one.
+   - **Final** — list the highest-step checkpoint directory directly under `<output_dir>/` (verl writes `global_step_<N>/` there, no `checkpoints/` subdir) and its disk size. For preempted: the last completed checkpoint (the basis for a resume). For crashed: the last checkpoint, if any, even if it's an early one.
    - **Best** — apply `training_monitor`'s `pick_best_checkpoint(...)` helper using the trainer-family's canonical val metric (see the skill's "Best checkpoint selection" table). Record `best_step`, `best_metric` (key + value), and `best_path`. When the trainer never logged the canonical val metric (e.g., `test_freq=0` or recipe didn't define val files), record `best_checkpoint: none — no val metric logged`. When the best step's ckpt isn't on disk (often because `save_freq` missed it), record `best_checkpoint: none — best step <N> not saved`.
 5. **Write `workspace/summary/summary.md`** following the per-status template (below).
 

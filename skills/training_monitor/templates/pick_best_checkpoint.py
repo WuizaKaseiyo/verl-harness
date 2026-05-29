@@ -75,7 +75,10 @@ def pick_best_checkpoint(
         best_step = int(float(best.get("training/global_step", "0")))
     except (TypeError, ValueError):
         return None
-    best_path = os.path.join(output_dir, "checkpoints", f"global_step_{best_step}")
+    # verl persists checkpoints at <output_dir>/global_step_<N>/ (NOT under
+    # a `checkpoints/` subdir, despite older docs claiming so — verified
+    # against verl 0.8.0.dev's _save_checkpoint at ray_trainer.py:935-975).
+    best_path = os.path.join(output_dir, f"global_step_{best_step}")
     if not os.path.isdir(best_path):
         return None
     return (best_step, float(best[metric_key]), best_path)

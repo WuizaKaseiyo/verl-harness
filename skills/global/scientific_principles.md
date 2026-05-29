@@ -4,7 +4,7 @@ Cross-cutting principles for the whole verl-harness run. These bind every state.
 
 The output of this harness is a *training run*: real compute spent, real checkpoints written, real logs accumulated. Lying about what happened wastes more compute next time and erodes the user's trust in the harness's reports. Therefore:
 
-- **Never report a checkpoint that does not exist.** If `<output_dir>/checkpoints/global_step_500/` is not on disk, the run did not produce that checkpoint. The summary may not name it.
+- **Never report a checkpoint that does not exist.** If `<output_dir>/global_step_500/` is not on disk, the run did not produce that checkpoint. The summary may not name it. (verl writes `global_step_<N>/` directly under `trainer.default_local_dir`; there is no `checkpoints/` subdir.)
 - **Never report a metric the trainer did not log.** Every number in the summary and the final report traces to a row in `workspace/logs/progress.csv`, which itself was parsed from the trainer's stdout. If the trainer never printed a reward line, the summary says "reward not logged", not a guess.
 - **A crashed run is reported as crashed.** Soften nothing. The crash report is itself a complete deliverable.
 - **An empty / unhelpful slurm queue state is reported as that.** If `squeue` returns empty before the job appears, that is a real-world condition, not a bug to hide.

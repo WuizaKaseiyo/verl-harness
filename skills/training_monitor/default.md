@@ -1,12 +1,28 @@
 training_monitor skill — what to watch for in a running verl training job and how to call its status.
 
-## Polling cadence (by target)
+## Two cadences — the poller's, and the agent's
+
+`monitor_training` runs **arm-and-detach**: a cheap non-LLM **poller** owns the tight loop; the **agent** re-engages only on events. They run on different clocks — keep them separate.
+
+### Poller cadence (the detached script — fine to be frequent)
 
 | Target        | Cadence | Rationale                                                 |
 |---------------|---------|-----------------------------------------------------------|
 | local-direct  | 30 s    | Local kernel + filesystem — cheap to poll                 |
 | local-slurm   | 60 s    | `squeue` hits the slurm controller — don't over-poll      |
 | ssh-slurm     | 90 s    | ssh handshake + `squeue` — coarsest cadence               |
+
+These are minimums *for a script*; `kill -0` / `squeue` / a byte-offset tail cost ~nothing and annoy no one at this rate.
+
+### Agent engagement cadence (event-driven — never the 30/60/90 s above)
+
+The LLM agent must not wake on the poller's clock. It re-engages only when:
+
+- the `workspace/job/terminal` sentinel appears (poller or slurm dependency job wrote it), **or**
+- the poller promotes a finding into `workspace/logs/escalation.md` (OOM / NaN / NCCL hang / divergence / stalled-stdout hang), **or**
+- a **heartbeat** elapses — default **15–30 min**, derived as a few × observed seconds-per-step — at which the agent confirms the poller is alive and the log byte-offset is still advancing.
+
+Rationale: a days-long run polled by the agent every 90 s = hundreds of context-reloads and compactions for a state that barely changes. Past the 5-minute prompt-cache window a longer heartbeat is strictly cheaper (one cache miss buys a long wait); so favour 15–30 min, not a round 5 min.
 
 ## Terminal conditions
 
@@ -18,7 +34,7 @@ All three must hold:
 
 1. **Job exit signal** — `kill -0 <pid>` returns nonzero (local-direct) or `sacct` reports `COMPLETED` (slurm).
 2. **Checkpoint OR last-step parity** — at least one of:
-   - `<output_dir>/checkpoints/global_step_<N>/` exists (verl saves checkpoints at this path; the convention is hardcoded in `verl/trainer/ppo/ray_trainer.py:940` as `f"global_step_{self.global_steps}"`). Note: if the recipe sets `trainer.save_freq=-1` (common for smoke / no-save runs), there will be **no** checkpoint directory even on a successful run — fall through to the next bullet.
+   - `<output_dir>/global_step_<N>/` exists (verl saves checkpoints directly under `trainer.default_local_dir` — i.e. the run's `output_dir` — with **no** intervening `checkpoints/` subdir; verified at `verl/trainer/ppo/ray_trainer.py:939-940`, `local_global_step_folder = os.path.join(self.config.trainer.default_local_dir, f"global_step_{self.global_steps}")`). Note: if the recipe sets `trainer.save_freq=-1` (common for smoke / no-save runs), there will be **no** checkpoint directory even on a successful run — fall through to the next bullet.
    - The trainer's stdout shows the final-step marker (next bullet) — sufficient on its own when `save_freq=-1`.
 3. **Terminal marker in stdout** — verl prints exactly one line at the end of `fit()`:
    ```
@@ -79,12 +95,20 @@ Fix suggestion: lower learning rate, enable gradient clipping (already 1.0 in ve
 
 ### NCCL hang
 
-- `NCCL WARN`
-- `Timeout waiting for ack`
-- `Watchdog caught collective operation timeout`
-- The process becomes silent for > 10 minutes despite the slurm job still running.
+**Escalate only on genuine collective failures / hangs:**
 
-Fix suggestion: check inter-node network (`ibstat`, `ucx_info`), confirm NCCL env vars (`NCCL_IB_HCA`, `NCCL_SOCKET_IFNAME`).
+- `Watchdog caught collective operation timeout`
+- `Timeout waiting for ack`
+- `NCCL.*unhandled (system|cuda) error`, `NCCL.*remote process exited`
+- The process becomes silent for > 10 minutes despite the slurm job still running (stalled-stdout hang).
+
+**Do NOT escalate on bare `NCCL WARN`.** During Ray/vLLM bring-up verl routinely logs
+`NCCL WARN Call to bind failed: Address already in use` (a RAS-daemon port retry) — this is
+**benign**, appears on healthy runs, and must not trip a divergence/crash alarm. Record such
+`NCCL WARN` lines in `anomalies.md` for visibility, but classify them informational, not fatal.
+(Verified: jobs 8579 and 8633 both logged this bind warning during startup and ran fine.)
+
+Fix suggestion (for the real hangs): check inter-node network (`ibstat`, `ucx_info`), confirm NCCL env vars (`NCCL_IB_HCA`, `NCCL_SOCKET_IFNAME`).
 
 ### vLLM rollout crash
 
@@ -117,11 +141,15 @@ These are not crashes — they are *signals* that the policy is drifting. Each f
 | Metric (canonical key from progress.csv) | Threshold | Inferred problem |
 |---|---|---|
 | `actor/kl` (or `training/kl`, depending on logger) | `> 0.05` | KL drift; policy diverging from reference. Suggest lowering `actor.kl_loss_coef` floor or raising `kl_ctrl.target_kl`. |
-| `actor/entropy` | `< 0.5` | Policy collapsing toward greedy. Suggest raising `actor.entropy_coeff` or lowering `rollout.temperature`. |
+| `actor/entropy` (lower bound) | `< 0.5` | Policy collapsing toward greedy. Suggest raising `actor.entropy_coeff` or lowering `rollout.temperature`. |
+| `actor/entropy` (upper bound) | rises above `2 × median(first 20 logged steps)` **and** still trending up over the last 50 steps | **Entropy explosion** — policy drifting toward random/uniform, the opposite failure from collapse. Suggest lowering `actor.entropy_coeff` (or setting it to 0), lowering `rollout.temperature`, or raising the KL anchor (`actor.kl_loss_coef`). The absolute value is vocab-dependent, so the signal is the *trend ratio*, not a fixed number. |
 | `response/length/mean` | `≥ 0.95 × data.max_response_length` | Truncation; the trainer can't see the end of responses, structural signal lost. Suggest raising `data.max_response_length` (and `actor_rollout_ref.actor.ppo_max_token_len_per_gpu` to match). |
 | `response/length/std` | `< 5` (after step 20) | Mode collapse — all responses the same length. Often co-occurs with low entropy. |
+| Canonical **val** metric (`val/reward/mean` for RL; `val/loss` for SFT) | drops `> 20%` below its running best (for higher-is-better) — or rises `> 20%` above its running best (for `val/loss`) — across `2+` consecutive validations | **Validation regression** — the policy is getting *worse* on held-out data even though training "runs". The best checkpoint is an earlier one, not the latest. Suggest stopping early and either resuming from the best step or revisiting `lr` / `entropy_coeff` / KL anchor. |
 
-These thresholds are conservative defaults. The user can override per intent (`monitor.kl_threshold`, etc.); document any override in `workspace/intake/training_intent.md`.
+**Divergence (joint signal — highest confidence).** When `actor/entropy` is climbing (upper-bound rule above) **and** the canonical val metric is regressing **at the same time**, treat it as policy divergence, not a transient wobble — record a single `divergence` anomaly that cites both series. This is exactly the failure observed in the C2 1000-step run (entropy ~0.4 → ~10 while `val/reward/mean` fell 0.10 → 0.05) and the "policy collapse" the recipe comments warn about. A diverging run will not recover on its own; surface it prominently in `anomalies.md` and `job_status.md` so the human can decide to stop. (The monitor only *surfaces* — it does not auto-`scancel`; auto-intervention is a separate, default-off policy.)
+
+These thresholds are conservative defaults. The user can override per intent (`monitor.kl_threshold`, `monitor.entropy_explosion_ratio`, `monitor.val_regression_pct`, etc.); document any override in `workspace/intake/training_intent.md`.
 
 Frontend mirroring (dashboard): when the progress chart panel exists, draw a faint horizontal threshold line at each value so the user can see the safety zone visually. (Front-end task — separate change.)
 
@@ -238,14 +266,14 @@ success | crashed | preempted | cancelled
 ## Terminal facts
 - final_step: 1500
 - final_epoch: 5
-- last_checkpoint: <output_dir>/checkpoints/global_step_1500/
+- last_checkpoint: <output_dir>/global_step_1500/
 - final_loss: 0.214
 - final_reward: 0.872
 
 ## Best checkpoint
 - best_step: 1200
 - best_metric: val/reward/mean = 0.891    # name + value of the trainer-family's canonical val metric
-- best_path: <output_dir>/checkpoints/global_step_1200/
+- best_path: <output_dir>/global_step_1200/
 - (or `best_checkpoint: none — no val metric logged or no save matched the best step` when applicable)
 
 ## Anomalies observed
@@ -260,6 +288,7 @@ success | crashed | preempted | cancelled
 
 ## Things you must not do
 
-- Do not over-poll. The cadences above are *minimums*; do not poll faster than them.
+- Do not over-poll. The poller cadences are *minimums*; do not poll faster than them.
+- **Do not let the agent busy-loop on the poller cadence.** The agent arms the detached poller and re-engages on events / a 15–30 min heartbeat. Sitting in a 30/60/90 s agent loop across a multi-hour/day run is the specific anti-pattern this state was rewritten to remove.
 - Do not invent log lines. The parser reads what the trainer actually wrote. If a metric column is missing on a row, it stays empty in `progress.csv`, not guessed.
 - Do not "interpret" crash tails — quote them verbatim, then add the one-line inferred cause. The user will read the tail and judge for themselves.

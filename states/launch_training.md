@@ -8,7 +8,7 @@ Apply whichever of `compute_local`, `compute_slurm`, `compute_ssh_slurm` matches
 
 Concretely:
 
-1. **Read** `workspace/intake/training_intent.md`, `workspace/recipe/recipe.md`, `workspace/dataset/dataset.md`, `workspace/reward/reward_config.md`, `workspace/sanity/sanity_report.md`, `workspace/compute/compute_choice.md`, `workspace/env/env_state.md`, `workspace/env/launch_env.sh`.
+1. **Read** `workspace/intake/training_intent.md`, `workspace/recipe/recipe.md`, `workspace/algorithm/algorithm_config.md`, `workspace/dataset/dataset.md`, `workspace/reward/reward_config.md`, `workspace/sanity/sanity_report.md`, `workspace/compute/compute_choice.md`, `workspace/env/env_state.md`, `workspace/env/launch_env.sh`.
 
    The `sanity_report.md` verdict must be `green` or `warn` before this state can proceed. (`fail` would have short-circuited to `finalize` from `sanity_rollout`.) Sanity has already verified — on the same compute target with the same `launch_env.sh` — that the model loads, the reward fn fires, and the 10-row distribution is non-degenerate.
 2. **Assemble the launch command.** Start from the recipe's launch path, then splice in three sets of overrides:
@@ -21,10 +21,11 @@ Concretely:
    ```
    +trainer.resume_from_path=<ckpt path>
    ```
-   verl's `_load_checkpoint` (at `verl/trainer/ppo/ray_trainer.py:1004-1029`) handles the rest: `auto` scans `<output_dir>/checkpoints/` for the highest `global_step_<N>/` and resumes there; `resume_path` resumes the exact checkpoint provided. The recipe-side `recipe.md` does not change between an initial run and a resume — only the CLI gets two extra fields appended.
+   verl's `_load_checkpoint` (at `verl/trainer/ppo/ray_trainer.py:1004-1033`) handles the rest: `auto` scans `<output_dir>` (= `trainer.default_local_dir`, **no** `checkpoints/` subdir) for the highest `global_step_<N>/` via `find_latest_ckpt_path` and resumes there; `resume_path` resumes the exact checkpoint provided. The recipe-side `recipe.md` does not change between an initial run and a resume — only the CLI gets two extra fields appended.
 
    Then layer in the standard override sets:
    - From `recipe.md` `## Key hyperparameters` (the user's locate_recipe-time overrides).
+   - From `algorithm_config.md` — the resolved axis pair and any algo-specific knobs. Append `algorithm.adv_estimator=<name>` when it differs from the recipe's default, and `actor_rollout_ref.actor.policy_loss.loss_mode=<name>` (plus loss-mode knobs like `actor_rollout_ref.actor.policy_loss.tau_pos`/`tau_neg`) whenever `loss_mode != vanilla`. Skip both when the matched recipe already sets them (a `gspo`/`cispo`/… recipe carries them inline — don't double-specify).
    - From `dataset.md` (the `data.train_files` / `data.val_files` paths).
    - From `reward_config.md` `## CLI injection` block — exactly as written. Common shapes by `reward_kind`:
      - `rule` → no CLI additions (reward is wired by `reward_model.style="rule"` in the parquet row).

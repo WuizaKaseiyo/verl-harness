@@ -10,7 +10,11 @@ This is a **Category B** harness — a workflow demo that produces a concrete ou
 
 The behaviour each item references has been **verified against `/Users/steven/verl`** (verl source tree); line and path references are the contract.
 
-- **The PPO-family algorithm dispatch.** All RL algorithms route through `verl.trainer.main_ppo` with `algorithm.adv_estimator=<name>`. The legal set of estimator names is **`AdvantageEstimator`** at `verl/trainer/ppo/core_algos.py` (an `Enum`) plus the `@register_adv_est(...)` decorator registry in the same file — the harness reads that registry instead of hardcoding a list. Verified estimators in the current verl checkout include `gae`, `grpo`, `grpo_vectorized`, `gdpo`, `grpo_passk`, `rloo`, `rloo_vectorized`, `opo`, `reinforce_plus_plus`, `remax`, `gpg`, `optimal_token_baseline`, `tir_optimal_token_baseline`.
+- **The PPO-family algorithm dispatch — two orthogonal axes.** All RL algorithms route through `verl.trainer.main_ppo`, configured along two independent registries in `verl/trainer/ppo/core_algos.py`, both read off the checkout (never hardcoded):
+  - **Advantage estimator** (`algorithm.adv_estimator=<name>`) — the `@register_adv_est(...)` registry. Verified in the current checkout: `gae`, `grpo`, `grpo_passk`, `grpo_vectorized`, `gdpo`, `rloo`, `rloo_vectorized`, `opo`, `reinforce_plus_plus`, `reinforce_plus_plus_baseline`, `remax`, `gpg`, `optimal_token_baseline`, `tir_optimal_token_baseline`.
+  - **Policy loss mode** (`actor_rollout_ref.actor.policy_loss.loss_mode=<name>`) — the `@register_policy_loss(...)` registry: `vanilla` (default), `gspo`, `cispo`, `geo_mean`, `sapo`, `gpg`, `dppo_tv`, `dppo_kl`, `clip_cov`, `kl_cov`, `bypass_mode`.
+
+  A named algorithm is often a *pair*: GSPO/CISPO/GMPO/SAPO/DPPO all run `adv_estimator=grpo` with a non-`vanilla` `loss_mode` (`examples/<name>_trainer/run_*.sh` carry both inline). `gdpo` is a real adv_estimator (Group reward-Decoupled), not classic DPO. `mtp` (Multi-Token Prediction) is a grpo run plus a model/training feature. `configure_algorithm` resolves the pair from the matched recipe, validates against both registries, and halts honestly on a name in neither.
 - **The SFT dispatch.** SFT does **not** go through `main_ppo`; the harness selects `verl.trainer.sft_trainer` (FSDP, single-node) or `verl.trainer.sft_trainer_ray` (Ray, multi-node) by user scale.
 - **The `examples/<algo>_trainer/run_*.sh` recipe-discovery flow.** The harness enumerates every shell script under `examples/<algo>_trainer/` (e.g., `examples/grpo_trainer/run_qwen3_4b_fsdp.sh`, `examples/ppo_trainer/run_qwen3_8b_fsdp.sh`, `examples/sft/...`), scores them by model-slug, backend (`fsdp` / `megatron` / `veomni`), and scale fit, and binds the user's intent to the best match. If no script matches, it falls back to a direct `python -m verl.trainer.main_ppo ...` invocation with Hydra-style overrides drawn from `verl/trainer/config/ppo_trainer.yaml`.
 - **The dataset preprocessing flow.** Known datasets bind to `examples/data_preprocess/<name>.py` (14 scripts verified on disk: `gsm8k`, `math_dataset`, `aime2024_multiturn_w_tool`, `dapo_multiturn_w_tool`, `full_hh_rlhf`, `geo3k`, `geo3k_multiturn_w_tool`, `gsm8k_multiturn_sft`, `gsm8k_multiturn_w_tool`, `gsm8k_tool_agent_loop`, `hellaswag`, `multiturn`, `pokemon`, `preprocess_search_r1_dataset`). Unknown HuggingFace datasets route through `generate_preprocess`, which writes a verl-compatible preprocess script from one of the existing templates, then `prepare_data` re-enters and runs it.
@@ -19,7 +23,7 @@ The behaviour each item references has been **verified against `/Users/steven/ve
 - **Real footguns inside the agent shell.** Two preflight checks the import-only provisioning checks miss:
   - **ROCR/CUDA env-collision** — `verl/single_controller/base/worker.py` raises inside the Ray worker actor's `__init__` if both `ROCR_VISIBLE_DEVICES` and `CUDA_VISIBLE_DEVICES` are set. The harness greps the env up-front and injects `unset` lines into `launch_env.sh`.
   - **vLLM V1 requirement** — `verl/workers/rollout/vllm_rollout/vllm_async_server.py` imports the V1 `AsyncLLM` unconditionally; modern vllm silently falls back to V0 under some configs. When the recipe uses `rollout.name=vllm`, the harness injects `export VLLM_USE_V1=1`.
-- **Monitor + report.** `monitor_training` loops on the chosen target's polling mechanism (`kill -0 <pid>` for local-direct; `squeue` / `sacct` for slurm; same via `ssh` for ssh-slurm), tails logs incrementally, scans for OOM / NaN / NCCL / vLLM / preemption patterns, and exits on success / crashed / preempted / cancelled. `summarize` and `finalize` produce branch-aware reports — a crashed run becomes a crash report with a specific remediation suggestion.
+- **Monitor + report (arm-and-detach).** Because runs span hours to days, `monitor_training` does not busy-loop an LLM. It launches a cheap **detached poller** (`skills/training_monitor/templates/watch_poller.py`) that owns the tight loop — polls the target's mechanism (`kill -0` / `squeue`+`sacct` / `ssh`), tails logs by byte-offset, parses verl's metric dict into `progress.csv`, scans OOM / NaN / NCCL / vLLM / preemption **plus** RL-divergence (entropy explosion + validation regression), and on terminal status writes `job_status.md` + touches a `terminal` sentinel. The agent re-engages only on events (sentinel / escalation / a 15–30 min heartbeat), not on the poller's 30/60/90 s. On slurm the terminal event can instead be delivered by an `sbatch --dependency=afterany` job. `summarize` and `finalize` produce branch-aware reports — a crashed run becomes a crash report with a specific remediation suggestion.
 - **HITL gates.** Recipe selection (when multiple match), prepared-data confirmation, compute-target confirmation, and the **cost gate** before launch.
 
 ### What this does NOT reproduce
@@ -93,7 +97,9 @@ When you have a verl checkout, a dataset (named or referenceable by HuggingFace 
 └─────┬────────────┘
       ▼
 ┌──────────────────┐
-│  select_compute  │  decide: local-direct | local-slurm | ssh-slurm
+│  select_compute  │  decide target (local-direct|local-slurm|ssh-slurm) +
+│                  │  estimate GPU budget from model size+algo (skills/gpu_budget)
+│                  │  → right-size gpus-per-node (cap-aware); halt if over budget.
 └─────┬────────────┘
       ▼
 ┌──────────────────┐
@@ -115,8 +121,9 @@ When you have a verl checkout, a dataset (named or referenceable by HuggingFace 
 └─────┬────────────┘
       ▼
 ┌──────────────────┐
-│ monitor_training │  loop: poll status / tail logs / scan OOM/NaN/NCCL/vLLM/preempt.
-│                  │  exits to summarize on success / crashed / preempted / cancelled.
+│ monitor_training │  arm a detached poller (status / tail / metrics→csv /
+│                  │  scan OOM·NaN·NCCL·vLLM·preempt·divergence); agent re-engages
+│                  │  on terminal sentinel / escalation / heartbeat → summarize.
 └─────┬────────────┘
       ▼
 ┌──────────────────┐
