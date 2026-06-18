@@ -18,3 +18,7 @@ venv/
 
 # Local Claude Code state (agent memory, agent definitions) — per-checkout, not tracked.
 .claude/
+
+# Personal working notes — kept locally, not pushed.
+experiment_design.md
+experiment_progress.md
