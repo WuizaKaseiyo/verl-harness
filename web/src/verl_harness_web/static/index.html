@@ -17,7 +17,7 @@
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/markdown/markdown.js"></script>
 <link rel="stylesheet" href="/static/app.css" />
 </head>
-<body data-state="idle" data-view="stream">
+<body data-state="idle" data-view="metrics">
 
 <!-- ─────────────────── MASTHEAD ─────────────────── -->
 <header class="masthead">
@@ -29,6 +29,9 @@
   </div>
   <div class="masthead-run">
     <span class="run-prefix">RUN</span>
+    <select class="run-select" id="run-select" aria-label="switch run">
+      <option value="">— latest by mtime —</option>
+    </select>
     <span class="run-id" id="masthead-run">— no run on record —</span>
   </div>
 </header>
@@ -64,10 +67,10 @@
 
 <!-- ─────────────────── TABS ─────────────────── -->
 <nav class="tabs" aria-label="View switcher">
-  <button class="tab" data-view="stream"><span class="tab-num">i.</span> stream</button>
-  <button class="tab" data-view="metrics"><span class="tab-num">ii.</span> metrics</button>
-  <button class="tab" data-view="map"><span class="tab-num">iii.</span> map</button>
-  <button class="tab" data-view="spec"><span class="tab-num">iv.</span> spec</button>
+  <button class="tab" data-view="metrics"><span class="tab-num">i.</span> metrics</button>
+  <button class="tab" data-view="map"><span class="tab-num">ii.</span> map</button>
+  <button class="tab" data-view="spec"><span class="tab-num">iii.</span> spec</button>
+  <button class="tab" data-view="stream"><span class="tab-num">iv.</span> stream</button>
   <span class="tabs-spacer"></span>
   <span class="tabs-meta" id="tabs-meta"><em>—</em></span>
 </nav>
@@ -75,13 +78,13 @@
 <!-- ─────────────────── READER ─────────────────── -->
 <main class="reader">
 
-  <!-- view: STREAM -->
-  <article class="view" data-view="stream">
+  <!-- view: STREAM (demoted to debug-only; tab kept at position iv.) -->
+  <article class="view" data-view="stream" hidden>
     <pre class="stream" id="stream"></pre>
   </article>
 
-  <!-- view: METRICS — wandb-style panel grid grouped by namespace -->
-  <article class="view" data-view="metrics" hidden>
+  <!-- view: METRICS — wandb-style panel grid grouped by namespace (DEFAULT) -->
+  <article class="view" data-view="metrics">
     <div class="metrics-controls">
       <span class="metrics-meta" id="metrics-meta"><em>—</em></span>
       <span class="metrics-spacer"></span>

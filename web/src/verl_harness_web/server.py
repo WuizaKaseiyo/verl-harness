@@ -95,21 +95,39 @@ def create_app(harness_root: Path, live: bool = True) -> Starlette:
             "overview_node": OVERVIEW_NODE,
         })
 
+    def _resolve_run(h, request: Request):
+        """Honor ?run_id=<name> if it points at an existing run dir; else latest."""
+        rid = (request.query_params.get("run_id") or "").strip()
+        if rid:
+            cand = h.runs_dir / rid
+            if cand.is_dir() and cand.parent == h.runs_dir:
+                return cand
+        return h.latest_run()
+
     async def api_runs(_: Request):
         h = parse_harness(harness_root)
         return JSONResponse({"runs": [
             {"id": r.name, "meta": h.run_meta(r)} for r in h.list_runs()
         ]})
 
-    async def api_run(_: Request):
+    async def api_run(request: Request):
         h = parse_harness(harness_root)
-        run = h.latest_run()
+        run = _resolve_run(h, request)
         if run is None:
             return JSONResponse({"run_id": None, "status": "idle",
                                  "entries": [], "current": None, "visited": []})
         meta = h.run_meta(run)
         entries = parse_state_log(h.state_log_path(run))
-        status = meta.get("status", "running" if entries else "idle")
+        # Status fallback chain: meta.json → state_log entries (live) → job_status.md
+        # (poller-written terminal) → idle. Without the job_status fallback, completed
+        # runs that weren't driven by the FSM state-log appear forever as "idle".
+        if meta.get("status"):
+            status = meta["status"]
+        elif entries:
+            status = "running"
+        else:
+            js = read_job_status(run)
+            status = js.get("status", "idle")
         current = entries[-1]["state"] if (entries and status == "running") else None
         return JSONResponse({
             "run_id": run.name,
@@ -181,22 +199,22 @@ def create_app(harness_root: Path, live: bool = True) -> Starlette:
         return JSONResponse({"ok": True, "path": path})
 
     # ---------- verl-specific run endpoints ---------------------------------
-    async def api_progress(_: Request):
+    async def api_progress(request: Request):
         h = parse_harness(harness_root)
-        run = h.latest_run()
+        run = _resolve_run(h, request)
         if run is None:
             return JSONResponse({"rows": 0, "columns": [], "series": {}})
         # Prefer stdout-derived (live, multi-row) over the static csv
         return JSONResponse(read_progress(run))
 
-    async def api_anomalies(_: Request):
+    async def api_anomalies(request: Request):
         h = parse_harness(harness_root)
-        run = h.latest_run()
+        run = _resolve_run(h, request)
         return JSONResponse({"anomalies": read_anomalies(run) if run else []})
 
-    async def api_job(_: Request):
+    async def api_job(request: Request):
         h = parse_harness(harness_root)
-        run = h.latest_run()
+        run = _resolve_run(h, request)
         if run is None:
             return JSONResponse({"info": {}, "status": {}})
         return JSONResponse({
@@ -206,15 +224,15 @@ def create_app(harness_root: Path, live: bool = True) -> Starlette:
 
     async def api_logs(request: Request):
         h = parse_harness(harness_root)
-        run = h.latest_run()
+        run = _resolve_run(h, request)
         if run is None:
             return JSONResponse({"size": 0, "since": 0, "content": ""})
         since = int(request.query_params.get("since", "0"))
         return JSONResponse(read_job_log_tail(run, since_byte=since))
 
-    async def api_summary(_: Request):
+    async def api_summary(request: Request):
         h = parse_harness(harness_root)
-        run = h.latest_run()
+        run = _resolve_run(h, request)
         if run is None:
             return JSONResponse({"summary": ""})
         return JSONResponse({"summary": read_summary(run)})

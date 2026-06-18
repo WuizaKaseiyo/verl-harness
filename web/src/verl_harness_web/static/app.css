@@ -127,18 +127,66 @@ a { color: var(--primary); text-decoration: none; }
   font-weight: 500;
   letter-spacing: 0.01em;
 }
-.masthead-run { display: flex; align-items: baseline; gap: var(--s-xs); }
+.masthead-run { display: flex; align-items: center; gap: var(--s-sm); }
 .run-prefix {
   font-size: 11px; font-weight: 500; letter-spacing: 0.15em;
   color: var(--muted); text-transform: uppercase;
 }
-.run-id {
+
+/* ── run picker — pill-style select that matches the run-id chip ──────── */
+.run-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
   font-family: var(--font-mono);
   font-size: 13px; font-weight: 500;
   color: var(--ink);
-  padding: 4px 10px;
-  background: var(--surface-card);
+  padding: 5px 26px 5px 12px;
+  background-color: var(--surface-card);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) calc(50% - 1px),
+    calc(100% - 10px) calc(50% - 1px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  border: 1px solid transparent;
   border-radius: var(--r-pill);
+  cursor: pointer;
+  max-width: 380px;
+  text-overflow: ellipsis;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.run-select:hover {
+  background-color: color-mix(in srgb, var(--surface-card) 70%, var(--primary) 8%);
+  border-color: color-mix(in srgb, var(--hairline) 60%, var(--primary) 40%);
+}
+.run-select:focus {
+  outline: 0;
+  border-color: var(--primary);
+  background-color: color-mix(in srgb, var(--surface-card) 50%, var(--canvas) 50%);
+}
+.run-select option {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--canvas);
+  color: var(--ink);
+  padding: 4px 8px;
+}
+
+/* The literal run-id label sits next to the dropdown as a small confirmation
+   readout — same chip language but quieter (muted color, no background fill). */
+.run-id {
+  font-family: var(--font-mono);
+  font-size: 12px; font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+.run-id::before {
+  content: "→ ";
+  color: color-mix(in srgb, var(--muted) 60%, transparent 40%);
+  margin-right: 2px;
 }
 
 /* ── BANNER (editorial hero on cream) ─────────────────────────────────── */
@@ -326,7 +374,7 @@ body[data-state="preempted"] .signal-dot { background: var(--warning); }
 
 .panel-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
   gap: var(--s-md);
 }
 .panel-grid > section,
@@ -342,11 +390,65 @@ body[data-state="preempted"] .signal-dot { background: var(--warning); }
   font-size: 13px; font-weight: 500; letter-spacing: 0.04em;
   color: var(--ink);
 }
-.panel-grid canvas { display: block; width: 100% !important; height: 160px !important; }
+.panel-grid canvas { display: block; width: 100% !important; height: 180px !important; }
 .panel-grid .panel-meta {
   font-family: var(--font-mono);
   font-size: 11px; color: var(--muted);
   margin-top: var(--s-xs);
+}
+
+/* ── per-panel card layout used by renderPanelGrid() ─────────────────────── */
+.metric-panel-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--s-sm);
+  margin-bottom: var(--s-xs);
+  padding-bottom: var(--s-xs);
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.metric-panel-title {
+  font-family: var(--font-sans);
+  font-size: 13px; font-weight: 500; letter-spacing: 0.04em;
+  color: var(--ink);
+  text-transform: lowercase;
+}
+.metric-panel-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.metric-panel-meta .spill {
+  color: var(--primary);
+  font-weight: 500;
+}
+.metric-panel-canvas {
+  position: relative;
+  margin: var(--s-xs) 0 var(--s-sm);
+}
+.metric-panel-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding-top: var(--s-xs);
+  border-top: 1px solid var(--hairline-soft);
+  max-height: 64px;
+  overflow-y: auto;
+}
+.metric-panel-legend-item {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.4;
+  cursor: default;
+  user-select: none;
+}
+.metric-panel-legend-item:hover { color: var(--ink); }
+.metric-panel-legend-swatch {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
 }
 .empty {
   grid-column: 1 / -1;

@@ -441,7 +441,11 @@ def read_job_status(run: Path) -> dict:
     out: dict = {"raw": text}
     m = re.search(r"^##\s*Status\s*\n(.+?)$", text, re.MULTILINE)
     if m:
-        out["status"] = m.group(1).strip().split("|")[0].strip()
+        raw = m.group(1).strip().split("|")[0].strip()
+        # Strip simple markdown emphasis the human report sometimes uses
+        # (e.g. **success** in summarize.md's success template).
+        raw = re.sub(r"^[*_`]+|[*_`]+$", "", raw).strip()
+        out["status"] = raw
     # Pull a handful of standard fields if present.
     for key in ("final_step", "final_epoch", "last_checkpoint",
                 "final_loss", "final_reward"):

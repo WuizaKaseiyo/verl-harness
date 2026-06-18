@@ -13,7 +13,7 @@ const S = {
   config: { live: true },
   harness: null,
   run: null,
-  view: 'stream',
+  view: 'metrics',
   current: null,
   activeStateSkills: new Set(),
   zoom: 1,
@@ -26,7 +26,18 @@ const S = {
   xAxisKey: 'training/global_step',  // (c)
   mapMode: 'phase',                  // 'phase' (5 nodes, default) | 'stage' (FSM for goal) | 'all' (15)
   goal: 'train',                     // (a) derived from training_intent.md
+  runId: '',                         // user-picked run from #run-select; '' = latest by mtime
+  runsList: [],                      // cached list from /api/runs
 };
+
+/* Append ?run_id=… (or &run_id=…) to a per-run endpoint when the user has
+   picked a specific run from the dropdown. Generic endpoints (/api/runs,
+   /api/harness, /api/config, /api/state/, /api/skill, /api/file) skip this. */
+function scoped(path) {
+  if (!S.runId) return path;
+  const sep = path.includes('?') ? '&' : '?';
+  return `${path}${sep}run_id=${encodeURIComponent(S.runId)}`;
+}
 
 /* ─── (a) per-goal state set used by map filter ──────────────────────────── */
 const TRACK_STATES = {
@@ -62,17 +73,29 @@ const PHASES = {
 /* ─── (c) namespace groups for panel grid ─────────────────────────────────── */
 const NS_GROUPS = [
   { name: 'training',       match: k => k.startsWith('training/') },
-  { name: 'actor · loss',   match: k => /^actor\/(loss|pg_loss|kl_loss|entropy|grad_norm|ppo_kl|kl_coef|pg_clipfrac|lr)\b/.test(k) },
+  /* actor.loss now also catches `pg_clipfrac_lower` (the `_lower` suffix was missed) */
+  { name: 'actor · loss',   match: k => /^actor\/(loss|pg_loss|kl_loss|entropy|grad_norm|ppo_kl|kl_coef|pg_clipfrac(_lower)?|lr)\b/.test(k) },
   { name: 'actor · perf',   match: k => k.startsWith('actor/perf/') },
+  /* split critic to give 'reward signal' its own card — was 12 lines crammed in one */
+  { name: 'reward signal',  match: k => /^critic\/(score|rewards|advantages|returns)\//.test(k) },
   { name: 'critic',         match: k => k.startsWith('critic/') },
-  { name: 'val · core',     match: k => k.startsWith('val-core/') },
-  { name: 'val · aux',      match: k => k.startsWith('val-aux/') },
-  { name: 'response / prompt', match: k => /^(response_length|response|prompt_length)\//.test(k) },
-  { name: 'reward',         match: k => k.startsWith('reward/') || /^critic\/(score|rewards|advantages|returns)/.test(k) },
-  { name: 'timing',         match: k => k.startsWith('timing_s/') || k.startsWith('timing_per_token_ms/') },
+  /* merge val · core + val · aux → one `validation` panel */
+  { name: 'validation',     match: k => k.startsWith('val-core/') || k.startsWith('val-aux/') },
+  /* response_length{_non_aborted}/* + prompt_length/* */
+  { name: 'response / prompt', match: k => /^(response_length(_non_aborted)?|response|prompt_length)\//.test(k) },
+  { name: 'reward',         match: k => k.startsWith('reward/') },
+  /* split heavy timing namespace: a small "throughput" panel for the headline steps,
+     and a bigger "timing · stages" panel for everything else. Cap render to top-N */
+  { name: 'timing · core',  match: k => /^timing_s\/(gen|step|update_actor|update_weights|ref|reward|old_log_prob|adv|save_checkpoint|testing)$/.test(k) },
+  { name: 'timing · per token', match: k => k.startsWith('timing_per_token_ms/') },
+  { name: 'timing · agent loop', match: k => k.startsWith('timing_s/agent_loop/') },
   { name: 'perf',           match: k => k.startsWith('perf/') && !k.startsWith('actor/perf/') },
   { name: 'turns / seqlen', match: k => k.startsWith('num_turns/') || k.startsWith('global_seqlen/') },
 ];
+
+/* Drop noisy / duplicate columns the csv parser sometimes emits. */
+const DROP_KEYS = new Set(['step']);
+const MAX_SERIES_PER_PANEL = 10;
 
 /* line colors for series within one panel — Claude design.md palette
    (coral primary, teal/amber accents, coral-active, ink, muted, semantic).
@@ -82,10 +105,14 @@ const SERIES_PALETTE = [
   '#5db8a6',  /* accent-teal            */
   '#e8a55a',  /* accent-amber           */
   '#a9583e',  /* primary-active         */
-  '#141413',  /* ink                    */
   '#5db872',  /* success                */
-  '#6c6a64',  /* muted                  */
   '#c64545',  /* error                  */
+  '#141413',  /* ink                    */
+  '#6c6a64',  /* muted                  */
+  /* extended HSL-distributed steps for high-series panels (>= 9 lines) — stays in
+     warm/teal range, avoids saturated blue/purple per Claude design.md */
+  '#9b6850',  '#74a99a',  '#bf8a4a',  '#7c4b3a',  '#4f9586',
+  '#a06c45',  '#5a8a7e',  '#b78f5e',  '#8e6042',  '#6d9e8d',
 ];
 
 /* ════════════════════════════ boot ════════════════════════════ */
@@ -129,7 +156,21 @@ async function boot() {
     if (S.view === 'map') renderGraph();
   });
 
-  setView('stream');
+  // run picker — user selects a specific run; '' falls back to latest by mtime
+  on($('#run-select'), 'change', async (e) => {
+    S.runId = e.target.value;        // '' means "follow latest"
+    S.logOffset = 0;                 // logs differ per run; rewind
+    S.startTs = null;                // recompute from new run's started_at
+    // tear down any existing per-run views/charts so stale data doesn't bleed
+    const stream = $('#stream'); if (stream) stream.innerHTML = '';
+    Object.values(S.charts).forEach(c => { try { c.destroy(); } catch (_) {} });
+    S.charts = {};
+    await reloadRun();
+    paintBanner();
+    await refreshAll();
+  });
+
+  setView('metrics');
 
   if (S.config.live) connectSSE();
   setInterval(tick, 1000);
@@ -158,16 +199,34 @@ async function putJSON(p, body) {
 async function reloadHarness() { S.harness = await getJSON('/api/harness'); }
 
 async function loadRunOrdinal() {
-  /* count total runs and find this run's 1-based index — for the N° label. */
+  /* Count total runs (for the N° label) AND populate the run-select dropdown. */
   try {
     const data = await getJSON('/api/runs');
     const runs = data.runs || [];
+    S.runsList = runs;
     S.runOrdinal = runs.length;     // latest run = total number
+    populateRunSelect(runs);
   } catch { S.runOrdinal = null; }
 }
 
+function populateRunSelect(runs) {
+  const sel = $('#run-select');
+  if (!sel) return;
+  /* Build options in mtime-DESCENDING order (latest first) — list_runs() returns ascending. */
+  const opts = ['<option value="">— latest by mtime —</option>'];
+  for (const r of [...runs].reverse()) {
+    const id = r.id;
+    const purpose = (r.meta && r.meta.purpose) ? ` — ${r.meta.purpose.substring(0, 60)}` : '';
+    const status = (r.meta && r.meta.status) ? ` [${r.meta.status}]` : '';
+    opts.push(`<option value="${esc(id)}">${esc(id)}${esc(status)}${esc(purpose)}</option>`);
+  }
+  const prev = S.runId || '';
+  sel.innerHTML = opts.join('');
+  sel.value = prev;
+}
+
 async function reloadRun() {
-  try { S.run = await getJSON('/api/run'); }
+  try { S.run = await getJSON(scoped('/api/run')); }
   catch { S.run = { run_id: null, status: 'idle', entries: [], current: null }; }
   const startedRaw = S.run?.meta?.started_at;
   S.startTs = startedRaw ? new Date(startedRaw).getTime() : null;
@@ -261,7 +320,7 @@ function setView(name) {
 /* ════════════════════════════ STREAM ════════════════════════════ */
 async function refreshStream() {
   try {
-    const data = await getJSON(`/api/logs?since=${S.logOffset}`);
+    const data = await getJSON(scoped(`/api/logs?since=${S.logOffset}`));
     if (data.size === undefined) return;
     if (data.size < S.logOffset) S.logOffset = 0;
     if (data.content) appendStream(data.content);
@@ -289,11 +348,11 @@ function appendStream(chunk) {
 /* ════════════════════════════ METRICS — panel grid ════════════════════════════ */
 async function refreshMetrics() {
   try {
-    const data = await getJSON('/api/progress');
+    const data = await getJSON(scoped('/api/progress'));
     renderPanelGrid(data);
   } catch (_) {}
   try {
-    const a = await getJSON('/api/anomalies');
+    const a = await getJSON(scoped('/api/anomalies'));
     renderAnomalies(a.anomalies || []);
   } catch (_) {}
 }
@@ -348,12 +407,28 @@ function renderPanelGrid(data) {
   const used = new Set();
   const groupsToShow = [];
   for (const grp of NS_GROUPS) {
-    const keys = cols.filter(c => grp.match(c) && !used.has(c));
+    const keys = cols.filter(c => grp.match(c) && !used.has(c) && !DROP_KEYS.has(c));
     // only keep numeric series with at least one finite value
     const numericKeys = keys.filter(k => (data.series[k] || []).some(v => typeof v === 'number' && isFinite(v)));
     if (numericKeys.length === 0) continue;
     numericKeys.forEach(k => used.add(k));
-    groupsToShow.push({ name: grp.name, keys: numericKeys });
+    // Cap series per panel — sort by variance so the most informative lines render first,
+    // then truncate. Spill count is surfaced in the panel header.
+    let renderKeys = numericKeys;
+    let spill = 0;
+    if (numericKeys.length > MAX_SERIES_PER_PANEL) {
+      const variance = (arr) => {
+        const xs = arr.filter(v => typeof v === 'number' && isFinite(v));
+        if (xs.length < 2) return 0;
+        const m = xs.reduce((a,b)=>a+b,0) / xs.length;
+        return xs.reduce((a,b) => a + (b-m)*(b-m), 0) / xs.length;
+      };
+      const scored = numericKeys.map(k => ({ k, v: variance(data.series[k] || []) }));
+      scored.sort((a,b) => b.v - a.v);
+      renderKeys = scored.slice(0, MAX_SERIES_PER_PANEL).map(x => x.k);
+      spill = numericKeys.length - MAX_SERIES_PER_PANEL;
+    }
+    groupsToShow.push({ name: grp.name, keys: renderKeys, totalKeys: numericKeys.length, spill });
   }
 
   // diff: remove panels no longer present
@@ -377,13 +452,14 @@ function renderPanelGrid(data) {
       panel.innerHTML = `
         <div class="metric-panel-head">
           <div class="metric-panel-title">${esc(grp.name)}</div>
-          <div class="metric-panel-meta">${grp.keys.length} series</div>
+          <div class="metric-panel-meta">${grp.totalKeys} series${grp.spill ? ` <span class="spill">· top ${grp.keys.length} shown</span>` : ''}</div>
         </div>
         <div class="metric-panel-canvas"><canvas></canvas></div>
         <div class="metric-panel-legend"></div>`;
       grid.appendChild(panel);
     } else {
-      panel.querySelector('.metric-panel-meta').textContent = `${grp.keys.length} series`;
+      panel.querySelector('.metric-panel-meta').innerHTML =
+        `${grp.totalKeys} series${grp.spill ? ` <span class="spill">· top ${grp.keys.length} shown</span>` : ''}`;
     }
 
     const datasets = grp.keys.map((k, i) => {
@@ -495,7 +571,7 @@ function renderAnomalies(rows) {
 /* ════════════════════════════ JOB ════════════════════════════ */
 async function refreshJob() {
   try {
-    const data = await getJSON('/api/job');
+    const data = await getJSON(scoped('/api/job'));
     const info = data.info || {};
     const status = data.status || {};
     const job = info.slurm_jobid || info.pid || '—';
