@@ -28,6 +28,57 @@ Three branching axes:
 See `task-overview.md` for the full diagram (resume / generate / eval
 goals included) and `CLAUDE.md` for editing conventions.
 
+## Layout
+
+```
+verl-harness/
+├── task-overview.md
+├── CLAUDE.md               — repo guidance for Claude Code (and other agents)
+├── states/
+│   ├── intake.md                    — dispatches on `goal`: train / resume_monitor / resume_train / generate / eval
+│   ├── locate_recipe.md
+│   ├── configure_algorithm.md       — applies algo_<name> skill, surfaces algo knobs
+│   ├── prepare_data.md
+│   ├── generate_preprocess.md
+│   ├── configure_reward.md          — picks reward_kind (rule/model/custom/shaped)
+│   ├── sanity_rollout.md            — load model, run 1 prompt, run reward fn
+│   ├── select_compute.md
+│   ├── provision_env.md
+│   ├── launch_training.md
+│   ├── monitor_training.md
+│   ├── run_generate.md              — batch generation (main_generation_server)
+│   ├── run_eval.md                  — offline scoring (main_eval; CPU-only)
+│   ├── summarize.md
+│   └── finalize.md
+├── skills/
+│   ├── intake/             — canonical training-intent fields, how to elicit them
+│   ├── verl_recipes/       — recipe scoring, direct-module fallback, recipe.md format
+│   ├── dataset_registry/   — the ~14 known verl-preprocessable datasets + column conventions
+│   ├── dataset_autogen/    — author a verl preprocess script from an HF dataset schema
+│   ├── compute_select/     — capability probes (gpu/slurm/ssh) and target selection
+│   ├── compute_local/      — local-direct provisioning, launch, monitoring
+│   ├── compute_slurm/      — local-slurm provisioning, launch, monitoring
+│   ├── compute_ssh_slurm/  — ssh-slurm provisioning, launch, monitoring
+│   ├── gpu_budget/         — per-GPU footprint estimate + N_min/N_rec halt-and-advise
+│   ├── training_monitor/   — polling cadences, terminal conditions, anomaly patterns, progress parsing (+ watch_poller.py)
+│   ├── reward_rule/        — built-in deterministic rewards
+│   ├── reward_model/       — pre-trained reward-model scoring
+│   ├── reward_custom/      — author a custom_reward_function.path file
+│   ├── reward_shaping/     — composing format + correctness + length rewards
+│   ├── algo_ppo/           — PPO-only knobs (critic, value_loss, kl_ctrl)
+│   ├── algo_grpo/          — GRPO group-rollout knobs (n, norm_adv_by_std, policy_loss.loss_mode)
+│   ├── algo_sft/           — SFT knobs (packing, chat template, dynamic batch)
+│   ├── algo_distill/       — on-policy distillation (teacher + distill loss)
+│   ├── algo_dpo/           — DPO handling (not first-class in verl)
+│   ├── algo_rm/            — RM training (not first-class in verl)
+│   ├── run_generate/       — main_generation_server CLI + pitfalls
+│   ├── run_eval/           — main_eval CLI + reward fn integration
+│   ├── builtin-tools/      — filesystem / shell / web tools used by every state
+│   └── global/             — honesty principle, scope discipline, state-log contract
+├── runs/                   — per-execution workspace dirs (gitignored)
+└── web/                    — sibling Python package: `verl-harness-web` live dashboard
+```
+
 ## Drive it
 
 Point an agent runner at this directory. Minimal prompt:
