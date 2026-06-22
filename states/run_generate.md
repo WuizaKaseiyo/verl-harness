@@ -86,7 +86,7 @@ Concretely:
 
 **Deliverables:**
 
-- generate_report: The run report; `finalize` writes a thin terminal wrapper around it.
+- generate_report: `workspace/generate/generate_report.md` — the successful generation report; `finalize` writes a thin terminal wrapper around it.
 
 ### finalize
 

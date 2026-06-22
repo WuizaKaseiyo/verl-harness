@@ -6,15 +6,29 @@ GRPO on gsm8k with Qwen3-4B" to a trained checkpoint and a structured
 report.
 
 Every state under `states/` and every skill under `skills/` is an
-instruction file the agent reads and executes. **There is no executable
-code in this repo; the agent is the runtime.**
+instruction file the agent reads and executes. The agent is the FSM runtime;
+the Python under `tools/` provides fallback capabilities and contract
+validation, while `web/` provides the dashboard. There is no in-tree training
+runner.
+
+`states/*.md` is the single source of truth for control flow. Validate the
+state graph and its terminal contracts after every spec change:
+
+```bash
+python tools/validate_harness.py .
+```
 
 ## FSM
 
 ```
-intake → locate_recipe → configure_algorithm → prepare_data ⇄ generate_preprocess
-       → configure_reward → select_compute → provision_env → sanity_rollout
-       → launch_training → monitor_training → summarize → finalize
+train: intake → locate_recipe → configure_algorithm → prepare_data ⇄ generate_preprocess
+              → configure_reward → select_compute → provision_env → sanity_rollout
+              → launch_training → monitor_training → summarize → finalize
+
+post-train: intake → run_generate → [run_eval] → finalize
+            intake → run_eval → finalize
+
+resume: intake → monitor_training | launch_training
 ```
 
 Three branching axes:
@@ -108,9 +122,9 @@ is no runner in this repo. Tested with [Claude Code](https://claude.com/claude-c
 uv run --project web verl-harness-web .
 ```
 
-Opens `http://127.0.0.1:8766`. Observe-only — renders the FSM, the
-progress chart, anomalies, job card, and the log tail from each run's
-workspace. See `web/README.md`.
+Opens `http://127.0.0.1:8766`. It renders the FSM, progress chart,
+anomalies, job card, and log tail, and can edit `task-overview.md` plus state
+and skill Markdown files. See `web/README.md`.
 
 ## What it does NOT do
 

@@ -2,85 +2,56 @@
 
 ## Description
 
-**Terminal state.** Assemble the final report and hand the completed run to the user. Like `summarize`, it branches on what happened — but at a coarser grain (which earlier state was the last to produce a substantive deliverable). The harness ends here.
-
-Entry paths:
-
-- **Normal exit.** Entered from `summarize` after `monitor_training` reached a terminal status (success / crashed / preempted / cancelled) and `summarize` produced `workspace/summary/summary.md`. The final report is a thin wrapper around the summary plus pointers to all artefacts.
-- **Provisioning failure.** Entered directly from `provision_env` when the environment is unfixable (verl install failed, model cannot be fetched, slurm partition does not exist). `workspace/env/env_failed.md` exists; no training was attempted.
-- **Launch failure.** Entered directly from `launch_training` when sbatch / ssh / local-process launch itself failed. `workspace/job/launch_failed.md` exists; the job never started.
+**Terminal state.** Produce exactly one `workspace/final_report.md` from the terminal deliverable that caused this state to be entered. This state does not infer success from the furthest completed stage: it reads the incoming artefact, preserves its status, and reports whether training or post-training work actually ran.
 
 Concretely:
 
-1. **Detect entry path** by checking which of these exist:
-   - `workspace/summary/summary.md` → normal exit
-   - `workspace/env/env_failed.md` → provisioning failure
-   - `workspace/job/launch_failed.md` → launch failure
-2. **Write `workspace/final_report.md`** with the structure for the matching path (below).
-3. **Tell the user** the one-line headline and point them at `workspace/final_report.md`.
+1. **Identify the terminal input.** Use the deliverable on the transition into this state and verify that its canonical file from `## Terminal Inputs` exists. Do not select an older artefact merely because it is also present in a resumed workspace. If the transition context is unavailable, choose the newest canonical terminal-input file by modification time and record that fallback explicitly.
+2. **Read shared context when present.** Read `workspace/intake/training_intent.md` plus any recipe, dataset, compute, environment, job, log, or checkpoint records relevant to the selected terminal input. Missing upstream files are expected for early halts and must not be invented.
+3. **Classify the outcome:**
+   - `completed` — `summary` with job status `success`, `generate_report`, or `eval_report`.
+   - `incomplete` — `summary` with job status `crashed`, `preempted`, or `cancelled`.
+   - `failed` — any `*_failed`, `algorithm_unsupported`, or `gpu_budget_exceeded` input.
+4. **Write `workspace/final_report.md`** with:
+   - outcome and terminal stage;
+   - one-line headline copied from or strictly supported by the terminal input;
+   - normalized intent fields that actually exist;
+   - what ran and what did not run;
+   - verbatim failure evidence or measured results;
+   - remediation/resume command when the input provides one;
+   - pointers to the terminal input and every existing relevant artefact.
+5. **Update run metadata.** Set `runs/<run_id>/meta.json.status` to the same outcome vocabulary (`completed`, `incomplete`, or `failed`) and record `terminal_input`, `terminal_stage`, and `finished_at`. Preserve unrelated metadata fields.
+6. **Tell the user** the headline, outcome, and path to `workspace/final_report.md`.
 
-### Final report — normal exit
+### Report rules by terminal family
 
-- The user's training intent (algorithm, dataset, model, compute target) — one paragraph.
-- The topline from `summary.md` (success / crashed / preempted / cancelled with the key numbers).
-- A pointer to every artefact:
-  - Run report — `workspace/summary/summary.md`
-  - Training-time log — `workspace/logs/job_log.md`
-  - Progress CSV — `workspace/logs/progress.csv`
-  - Anomalies — `workspace/logs/anomalies.md` (if any)
-  - Final checkpoint — `<output_dir>/global_step_<N>/` (resolved path)
-  - Best checkpoint — `<output_dir>/global_step_<best_N>/` (the one to hand downstream)
-  - Final wandb run url — if configured
-  - Recipe used — `workspace/recipe/recipe.md`
-  - Prepared dataset — `workspace/dataset/dataset.md`
-  - Job info — `workspace/job/job_info.md`
-- For crashed / preempted: the remediation or resume command from `summary.md`, hoisted to the top.
+- **Training summary (`summary`).** Preserve the exact job status. For success, report final and best checkpoints only when they exist on disk. For crash/preemption/cancellation, hoist the remediation or resume command and state that training did not complete.
+- **Early training halt (`algorithm_unsupported`, `gpu_budget_exceeded`, `env_failed`, `sanity_failed`, `launch_failed`).** State plainly that training never started, except when `sanity_failed` spent a bounded sanity probe; in that case say that full training never started. Include the exact failed gate and unblock action.
+- **Generation (`generate_report` / `generate_failed`).** Report output parquet path and row count only when verified. Do not imply that training occurred in this run.
+- **Evaluation (`eval_report` / `eval_failed`).** Report scores verbatim by `data_source` on success. On failure, report no aggregate score unless the terminal input explicitly labels it partial.
 
-#### Next steps
+## Terminal Inputs
 
-The harness ends here, but the produced checkpoint is the input to several common downstream uses. Append the exact commands the user can run, using the best checkpoint path resolved above:
+Every transition into `finalize` must deliver exactly one of these names at the canonical path. This section is machine-checked by `tools/validate_harness.py`.
 
-```bash
-# Offline evaluation on a held-out dataset (or another known dataset)
-cd <VERL_ROOT>
-python -m verl.trainer.main_eval \
-  data.val_files=<path/to/eval.parquet> \
-  actor_rollout_ref.model.path=<best_path> \
-  trainer.n_gpus_per_node=<N> \
-  trainer.logger=["console"]
-
-# Launch a vllm-backed generation server (chat completion endpoint)
-python -m verl.trainer.main_generation_server \
-  actor_rollout_ref.model.path=<best_path> \
-  actor_rollout_ref.rollout.name=vllm \
-  actor_rollout_ref.rollout.tensor_model_parallel_size=<TP> \
-  actor_rollout_ref.rollout.gpu_memory_utilization=0.6
-
-# Convert FSDP shards to a single HF-safetensors directory (for hub upload / inference outside verl)
-# (Phase 3 — see roadmap §3 "convert" track for the supported flow once that track lands.)
-```
-
-Each command uses the *best* checkpoint by default; the user can substitute the *final* path if they want the last-step model instead.
-
-### Final report — provisioning failure
-
-- The intent, then plainly: "Environment provisioning failed; training never started."
-- The failure mode from `env_failed.md`.
-- What the user needs to do to unblock.
-- A pointer to `workspace/env/env_state.md` (the partial provisioning record) and `env_failed.md`.
-
-### Final report — launch failure
-
-- The intent, then plainly: "Job launch failed; training never started."
-- The exact command that was attempted, the exit code, and the stderr from `launch_failed.md`.
-- What the user needs to do to unblock (typical causes: invalid slurm directives, ssh credentials, missing partition).
-- A pointer to `workspace/job/launch_failed.md`.
+- `summary` — `workspace/summary/summary.md` — terminal training report after monitoring.
+- `algorithm_unsupported` — `workspace/algorithm/algorithm_unsupported.md` — requested algorithm has no accepted trainer binding.
+- `gpu_budget_exceeded` — `workspace/compute/gpu_budget_exceeded.md` — minimum viable allocation exceeds the GPU cap.
+- `env_failed` — `workspace/env/env_failed.md` — environment provisioning could not complete.
+- `sanity_failed` — `workspace/sanity/sanity_failed.md` — model/data/reward sanity probe failed.
+- `launch_failed` — `workspace/job/launch_failed.md` — the full job never started.
+- `generate_report` — `workspace/generate/generate_report.md` — generation completed and no chained eval was requested.
+- `generate_failed` — `workspace/generate/generate_failed.md` — generation crashed or timed out.
+- `eval_report` — `workspace/eval/eval_report.md` — standalone or chained evaluation completed.
+- `eval_failed` — `workspace/eval/eval_failed.md` — standalone or chained evaluation failed.
 
 ## Skills
 
 - skills/builtin-tools
 - skills/global
 
-<!--
-Terminal state — no `## Next States`. The agent halts here.
--->
+## Hand-off Points
+
+- None. `finalize` reports the already-determined terminal outcome and does not introduce a new approval gate.
+
+<!-- Terminal state: no `## Next States`. -->

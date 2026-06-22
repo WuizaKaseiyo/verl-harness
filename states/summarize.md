@@ -57,6 +57,10 @@ Concretely:
 - skills/builtin-tools
 - skills/global
 
+## Hand-off Points
+
+- None. Summarization is a deterministic report over recorded run artefacts and introduces no new decision.
+
 ## Next States
 
 ### finalize
@@ -65,4 +69,4 @@ Concretely:
 
 **Deliverables:**
 
-- summary: The status-branched run report — topline, training curve numbers, checkpoint path, compute cost, anomalies, and (for non-success) a specific remediation or resume command.
+- summary: `workspace/summary/summary.md` — the status-branched run report with topline, training curve numbers, checkpoint path, compute cost, anomalies, and (for non-success) a specific remediation or resume command.

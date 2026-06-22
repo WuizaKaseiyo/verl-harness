@@ -88,7 +88,7 @@ Concretely:
 
 **Deliverables:**
 
-- eval_report: Per-data_source scores, distribution stats, compute used, sample rows.
+- eval_report: `workspace/eval/eval_report.md` — per-data_source scores, distribution stats, compute used, and sample rows.
 
 ### finalize
 

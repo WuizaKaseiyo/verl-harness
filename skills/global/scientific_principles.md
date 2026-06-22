@@ -81,13 +81,16 @@ Created by the first state (`intake`) on entry, finalised by `finalize`:
 
 ```json
 {
-  "status": "completed | crashed | preempted | cancelled | failed",
+  "status": "completed | incomplete | failed",
   "finished_at": "<ISO8601 UTC>",
-  "terminal_state": "<the last state entered, e.g., finalize>",
-  "terminal_verdict": "<success | crashed | preempted | cancelled>",
+  "terminal_state": "finalize",
+  "terminal_input": "<deliverable name declared in states/finalize.md>",
+  "terminal_stage": "<state that transitioned to finalize>",
   "final_report": "workspace/final_report.md"
 }
 ```
+
+`completed` means a successful training summary, generation report, or evaluation report. `incomplete` means training started but ended crashed, preempted, or cancelled. `failed` means an early gate, launch, generation, or evaluation failed. The detailed trainer/job status remains in the terminal input and `final_report.md`.
 
 If HITL is escaped mid-run (the user flipped to `--no-hitl` after entry, or the run started in `--no-hitl`), append `hitl_switched_at` and `hitl_switched_reason` so the audit trail is unambiguous.
 
