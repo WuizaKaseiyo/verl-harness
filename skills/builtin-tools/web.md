@@ -26,7 +26,7 @@ Issues a Google search through [Serper.dev](https://serper.dev) and returns the 
   "tool": "search_web",
   "capability": "web.search",
   "provider": "serper",
-  "query": "FastHarness agent workflow",
+  "query": "verl-harness agent workflow",
   "location": null,
   "requested_results": 10,
   "fetched_at": "2026-05-13T12:00:00+00:00",
@@ -69,7 +69,7 @@ Always pass `--output` for `search_web` — full result sets are bulky (10 entri
 
 ## `fetch_webpage` — fetch a URL and extract readable text
 
-Performs an HTTP GET with `User-Agent: FastHarness/0.1`, follows redirects, and extracts the readable text + links if the response is HTML. Non-HTML responses are returned as raw text (truncated).
+Performs an HTTP GET with `User-Agent: verl-harness/0.1`, follows redirects, and extracts the readable text + links if the response is HTML. Non-HTML responses are returned as raw text (truncated).
 
 **Parameters**
 

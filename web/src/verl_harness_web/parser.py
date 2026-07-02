@@ -2,8 +2,8 @@
 
 Self-contained, no external deps. Two layers:
 
-- Layer 1 (harness FSM): task-overview.md + states/ + skills/ — structurally identical
-  to FastHarness in general, since verl-harness is a FastHarness-compatible harness.
+- Layer 1 (harness FSM): task-overview.md + states/ + skills/ — the markdown FSM
+  definition that drives control flow.
 - Layer 2 (verl-specific run artefacts): the run's workspace/ directory has
   training-specific files this parser knows how to read — progress.csv,
   anomalies.md, job_status.md, job_info.md, job_log.md, summary.md.
@@ -172,9 +172,9 @@ def _parse_state(path: Path) -> State:
         token = b.split("#", 1)[0].strip()
         if token.startswith("skills/"):
             skills.append(token)
-    # Canonical key is `Hand-off Points` (matches FastHarness validate-harness +
-    # fastharness-web/tui parsers). The older `Human Checkpoints` name is read
-    # as a fallback for in-flight harnesses that haven't migrated yet.
+    # Canonical key is `Hand-off Points` (matches `tools/validate_harness.py`).
+    # The older `Human Checkpoints` name is read as a fallback for in-flight
+    # harnesses that haven't migrated yet.
     hcps = secs.get("Hand-off Points", secs.get("Human Checkpoints", "")).strip()
     transitions: list[Transition] = []
 

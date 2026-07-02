@@ -1,4 +1,4 @@
-"""Shared logging helpers for FastHarness built-in tools."""
+"""Shared logging helpers for verl-harness built-in tools."""
 from __future__ import annotations
 
 import json

@@ -71,7 +71,7 @@ Created by the first state (`intake`) on entry, finalised by `finalize`:
   "started_at": "<ISO8601 UTC>",
   "status": "running",
   "hitl": true,
-  "driver": "<runner identifier — e.g., claude-opus-4-7, fastharness-cli, custom>",
+  "driver": "<runner identifier — e.g., claude-opus-4-7, custom>",
   "harness_commit": "<git rev-parse --short HEAD of this harness folder>",
   "purpose": "<one-line free text from intake>"
 }

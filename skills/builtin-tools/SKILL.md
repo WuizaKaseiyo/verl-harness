@@ -1,11 +1,11 @@
 ---
 name: builtin-tools
-description: Use when a state needs filesystem read/write, shell execution, web search, or web URL fetching and you want to know exactly which FastHarness built-in tool to invoke, what its arguments are, what JSON it returns, and what safety guarantees apply. Covers 9 tools (list_dir, read_file, grep, file_create, append_file, mkdir, shell_exec, search_web, fetch_webpage) bound to 5 capabilities. Called automatically by `run-harness` Step 2.6 when a declared `## Required Capabilities` token has no native host tool, and ad-hoc by any state whose work needs these primitives.
+description: Use when a state needs filesystem read/write, shell execution, web search, or web URL fetching and you want to know exactly which built-in tool to invoke, what its arguments are, what JSON it returns, and what safety guarantees apply. Covers 9 tools (list_dir, read_file, grep, file_create, append_file, mkdir, shell_exec, search_web, fetch_webpage) bound to 5 capabilities. Called automatically by `run-harness` Step 2.6 when a declared `## Required Capabilities` token has no native host tool, and ad-hoc by any state whose work needs these primitives.
 ---
 
-# builtin-tools — FastHarness Built-in Tool Reference
+# builtin-tools — Built-in Tool Reference
 
-A reference for the nine built-in tools that ship with FastHarness. The implementations live in `tools/`; this skill is the agent-facing manual: when to use them, how to invoke them, what they return, what they refuse to do.
+A reference for the nine built-in tools that ship with verl-harness. The implementations live in `tools/`; this skill is the agent-facing manual: when to use them, how to invoke them, what they return, what they refuse to do.
 
 ## When this skill applies
 
@@ -20,7 +20,7 @@ You do **not** need this skill for capabilities your host already covers nativel
 For any operation you need to perform:
 
 1. **If your host exposes a native tool** for the capability, use it. Native tools are usually faster, better integrated, and have richer error messages.
-2. **Else, use a FastHarness built-in tool** from this skill.
+2. **Else, use a built-in tool** from this skill.
 3. **If neither is available**, write the missing capability to `<WORKSPACE>/error.md` per `run-harness` Step 2.6 and halt. Do not invent a workaround.
 
 ## The nine tools at a glance

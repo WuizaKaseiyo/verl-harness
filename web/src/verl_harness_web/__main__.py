@@ -20,7 +20,7 @@ def main() -> None:
     )
     p.add_argument("harness_path", type=Path, help="Path to a verl-harness folder.")
     p.add_argument("--port", type=int, default=8766,
-                   help="Port to bind (default 8766; fastharness-web uses 8765).")
+                   help="Port to bind (default 8766).")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--static", action="store_true",
                    help="Disable filesystem watcher (no live updates).")

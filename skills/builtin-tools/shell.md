@@ -125,4 +125,4 @@ python tools/registry.py shell_exec \
 
 - **Do not chain `&&` to bypass `cwd` sandboxing.** A command like `cd ../../etc && cat passwd` starts inside `cwd` but the chained `cd` is outside the sandbox layer. The blacklist may or may not catch it. Use `shell_exec` for legitimate workspace commands only.
 - **Do not pipe shell output into another `shell_exec` to grow effective output past `max_output_chars`.** If you need more output than the cap allows, redirect to a file under `<WORKSPACE>/` and read that file separately with `read_file`.
-- **Do not use `shell_exec` for state-machine logic** (e.g., conditional transitions). Transitions are prompt-driven in FastHarness — keep your reasoning in prose.
+- **Do not use `shell_exec` for state-machine logic** (e.g., conditional transitions). Transitions are prompt-driven — keep your reasoning in prose.

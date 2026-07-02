@@ -72,7 +72,7 @@ def _request(
     extra_headers: dict[str, str] | None = None,
 ) -> tuple[str, int, str, str]:
     headers = {
-        "User-Agent": "FastHarness/0.1",
+        "User-Agent": "verl-harness/0.1",
         "Accept-Language": "en-US,en;q=0.9",
     }
     if extra_headers:

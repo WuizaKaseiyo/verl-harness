@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""verl-harness built-in tool registry — slim subset of FastHarness `tools/registry.py`.
+"""verl-harness built-in tool registry.
 
-Exposes only the nine FastHarness *builtin* tools (filesystem / shell / web)
-that verl-harness's `## Required Capabilities` actually maps to. The meta-harness
-tools that the upstream FastHarness registry also dispatches (map_elites,
-pareto, playbook_merge, widesearch, embed, keyword_match, run_inner_harness,
-harness_interface) are not present here — they belong to evolve-harnesses, not
-to this Category B example harness.
+Exposes the nine built-in tools (filesystem / shell / web) that verl-harness's
+`## Required Capabilities` maps to. New tools can be added by extending
+BUILTIN_TOOL_REGISTRY + BUILTIN_TOOL_SCHEMAS below.
 
-If you need a meta-harness tool, vendor it from FastHarness/tools/ into this
-directory and extend BUILTIN_TOOL_REGISTRY + BUILTIN_TOOL_SCHEMAS below. The
-upstream module shape is intentionally preserved so re-syncing is mechanical.
-
-Invocation (mirrors upstream verbatim):
+Invocation:
 
     python tools/registry.py <tool_name> '<json_args>' \\
         --workspace "<WORKSPACE>" [--output "<WORKSPACE>/<path>"]
@@ -283,7 +276,7 @@ def _parse_json_args(raw: str | None) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="registry.py",
-        description="Run a verl-harness (FastHarness-compatible) built-in tool.",
+        description="Run a verl-harness built-in tool.",
     )
     parser.add_argument("tool", nargs="?", help="Tool name to execute.")
     parser.add_argument("arguments", nargs="?", help="JSON object with tool arguments.")

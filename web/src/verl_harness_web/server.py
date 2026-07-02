@@ -2,7 +2,7 @@
 
 Two layers of endpoints:
 
-- generic harness endpoints (mirroring fastharness-web): /api/harness, /api/run,
+- generic harness endpoints: /api/harness, /api/run,
   /api/state/{name}, /api/skill, /api/file
 - verl-specific run endpoints: /api/progress, /api/anomalies, /api/job,
   /api/logs, /api/summary

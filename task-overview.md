@@ -2,11 +2,11 @@
 
 ## Overview
 
-This harness drives a FastHarness-compatible agent through the full lifecycle of a [verl](https://github.com/volcengine/verl) training run: it reads the user's training intent (which algorithm, which dataset, which model, what compute), locates the right recipe inside the verl checkout, prepares the dataset (using verl's built-in preprocessing or auto-generating one for an unknown HuggingFace dataset), picks a compute target (local GPU, local Slurm login node, or remote Slurm via ssh), provisions the environment, launches the training job, monitors it to terminal status, and writes a summary report.
+This harness drives an LLM agent through the full lifecycle of a [verl](https://github.com/volcengine/verl) training run: it reads the user's training intent (which algorithm, which dataset, which model, what compute), locates the right recipe inside the verl checkout, prepares the dataset (using verl's built-in preprocessing or auto-generating one for an unknown HuggingFace dataset), picks a compute target (local GPU, local Slurm login node, or remote Slurm via ssh), provisions the environment, launches the training job, monitors it to terminal status, and writes a summary report.
 
 **Authority rule:** `states/*.md` is the single source of truth for FSM control flow. This overview is a human-readable projection. After changing a state or transition, run `python tools/validate_harness.py .` and update this projection when the visible flow changed.
 
-This is a **Category B** harness — a workflow demo that produces a concrete output (a trained checkpoint + a structured run report). It does not optimise verl itself; it drives it. It is structured like `web2bigtable/`, `ai-scientist-v2/`, `eduplanner/`: a workflow harness whose deliverable is a concrete artefact a user can hand off.
+This is a workflow harness — it produces a concrete output (a trained checkpoint + a structured run report). It does not optimise verl itself; it drives it.
 
 ### What this reproduces
 
@@ -178,7 +178,7 @@ Every state's `## Hand-off Points` is authoritative. `--no-hitl` skips ordinary 
 
 At least one of `slurm.access` / `ssh.exec` / `gpu.access` must be present, or no training can run and `select_compute` halts with an error.
 
-**Built-in tools fallback.** The five standard FastHarness capabilities (`filesystem.read`, `filesystem.write`, `shell.exec`, `web.search`, `web.fetch`) are all backed in-tree at `tools/registry.py` via the **builtin-tools** skill (`skills/builtin-tools/`). A host that lacks native equivalents can run `python tools/registry.py <tool_name> '<json_args>' --workspace "<WORKSPACE>"` for any of the nine bundled tools (`list_dir`, `read_file`, `grep`, `file_create`, `append_file`, `mkdir`, `shell_exec`, `search_web`, `fetch_webpage`). `search_web` requires `SERPER_API_KEY` in the env; the rest have no external requirements.
+**Built-in tools fallback.** The five standard host capabilities (`filesystem.read`, `filesystem.write`, `shell.exec`, `web.search`, `web.fetch`) are all backed in-tree at `tools/registry.py` via the **builtin-tools** skill (`skills/builtin-tools/`). A host that lacks native equivalents can run `python tools/registry.py <tool_name> '<json_args>' --workspace "<WORKSPACE>"` for any of the nine bundled tools (`list_dir`, `read_file`, `grep`, `file_create`, `append_file`, `mkdir`, `shell_exec`, `search_web`, `fetch_webpage`). `search_web` requires `SERPER_API_KEY` in the env; the rest have no external requirements.
 
 ## Notes
 

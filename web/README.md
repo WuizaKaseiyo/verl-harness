@@ -7,7 +7,7 @@ uv tool install --from ./web verl-harness-web
 verl-harness-web /path/to/verl-harness/
 ```
 
-Opens `http://127.0.0.1:8766` (fastharness-web is on 8765).
+Opens `http://127.0.0.1:8766`.
 
 ## What it shows
 
