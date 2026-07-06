@@ -52,8 +52,12 @@ First command on the server (must print exactly this):
 
 ## 2. Seed matrix
 
-Six runs. S2 is the headline (matches the paper's own example); if time runs
-short, priority order is **S2 → S6 → S5 → S1 → S3 → S4**.
+Six runs were originally planned. **Descoped 2026-07-06** to a ~30 GPU-hour
+demonstration budget (user decision at the S2 recipe gate, recorded in
+`experiment_progress.md`): run **S2 → S6 → S5 only**; S1 is an optional
+add-back (~5 GPU-h) if those three land under budget; **S3 and S4 are out of
+scope**. §5.6 now reads as a single-seed demonstration (N=1, plus both
+controls), not a four-fault-class study. S2 remains the headline.
 
 | id | track | seeded fault (knob) | refine block | expected loop behaviour |
 |---|---|---|---|---|
@@ -70,15 +74,19 @@ prefer the recipe's spelling if it differs.
 
 ## 3. Budget and horizons
 
-- Cap every training iteration: `total_training_steps ≈ 150–250` (GRPO) or one
-  short epoch on a MATH subset (SFT), targeting **30–60 min wall-clock per
-  iteration** on 4×H100. The claim being tested is workflow validity, not
-  optimizer quality — short horizons are legitimate; say so in the paper.
+- Caps (descoped 2026-07-06; calibrated from N11's measured ~70 s/step and its
+  `critic/score/mean` crossing 0.90 at step 31, ≥ 0.918 after step 40):
+  **S2 `total_training_steps=60`** (SAVE_FREQ/TEST_FREQ 30), **S5/S6
+  `total_training_steps=40`** (SAVE_FREQ/TEST_FREQ 20) — ≈ 90 / 60 min
+  wall-clock per iteration on 4 GPUs. The claim being tested is workflow
+  validity, not optimizer quality — short horizons are legitimate; say so in
+  the paper.
 - Calibrate targets so the *seeded* config misses but the *corrected* config
   reaches within the cap (your existing paper runs are the calibration source:
   GRPO-3B previously reached ~0.95 reward).
-- Worst case ≈ 14 training iterations total (S1–S4 up to 3 each, S5 exactly 2,
-  S6 exactly 1) ≈ one long day on a single 4×H100 allocation.
+- Expected ≈ 5 training iterations (S2×2, S5×2, S6×1) ≈ **26.5 GPU-h**
+  including sanity probes; worst case (S2 needs its 3rd iteration) ≈ **33
+  GPU-h**. One working day on the 4-GPU allocation.
 
 ## 4. Per-run protocol
 
@@ -86,7 +94,7 @@ prefer the recipe's spelling if it differs.
 
    > Run GRPO on gsm8k with Qwen/Qwen2.5-3B-Instruct on the local slurm
    > cluster (partition <P>, account <A>, 1 node × 4 H100), output_dir
-   > /scratch/<you>/loopa-S2. Cap training at 200 steps. Set
+   > /scratch/<you>/loopa-S2. Cap training at 60 steps. Set
    > actor_rollout_ref.actor.kl_loss_coef=0.1. Refine: target
    > critic/score/mean ≥ 0.90 within 3 iterations.
 
@@ -111,7 +119,8 @@ prefer the recipe's spelling if it differs.
 
 ## 5. Numbers for the paper (§5.6 placeholders)
 
-- `[N]` = seeded runs attempted (S1–S4; S5/S6 are controls, report separately).
+- `[N]` = seeded runs attempted (descoped design: S2 only → N=1, S1 optional
+  add-back; S5/S6 are controls, report separately).
 - `[N_s/N]` = seeded runs whose target was reached within the bound.
 - `[K]` = median iterations-to-target over successful runs (report max too).
 - `[X] → [Y]` = target-metric mean at iteration 1 vs final iteration, averaged

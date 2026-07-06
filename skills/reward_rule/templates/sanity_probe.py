@@ -28,7 +28,12 @@ def _read_md_kv(path: str) -> dict[str, str]:
         for line in f:
             if ":" in line and not line.lstrip().startswith("#"):
                 k, _, v = line.partition(":")
-                out[k.strip().lstrip("-").strip()] = v.strip()
+                v = v.strip()
+                # Strip inline "  # comment" — the intake skill's canonical
+                # training_intent.md format uses them (e.g. "- dataset: gsm8k  # known verl name").
+                if " #" in v:
+                    v = v.split(" #", 1)[0].rstrip()
+                out[k.strip().lstrip("-").strip()] = v
     return out
 
 
@@ -82,7 +87,15 @@ def invoke_reward(reward_config: dict[str, str], row: dict) -> dict | float:
             spec.loader.exec_module(mod)  # type: ignore[attr-defined]
         else:
             mod = importlib.import_module(module_path)
-        return mod.compute_score(data_source, response, ground_truth, extra_info)
+        # Prefer verl's dispatcher signature (data_source, solution_str, ground_truth, extra_info)
+        # — verl/utils/reward_score/__init__.py:default_compute_score — which is exactly what the
+        # trainer invokes at runtime. Per-dataset modules (e.g. gsm8k.py) expose
+        # compute_score(solution_str, ground_truth, ...) instead: a 4-positional call would
+        # silently mis-bind arguments, so fall back to the 2-arg form for those.
+        fn = getattr(mod, "default_compute_score", None)
+        if fn is not None:
+            return fn(data_source, response, ground_truth, extra_info)
+        return mod.compute_score(response, ground_truth)
     if kind == "model":
         # RM-based reward: load the RM and score. Out of scope for this template
         # since RM loading is heavyweight — caller (sanity_rollout state) handles it.
