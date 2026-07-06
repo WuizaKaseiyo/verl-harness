@@ -2,7 +2,7 @@
 
 ## Overview
 
-This harness drives an LLM agent through the full lifecycle of a [verl](https://github.com/volcengine/verl) training run: it reads the user's training intent (which algorithm, which dataset, which model, what compute), locates the right recipe inside the verl checkout, prepares the dataset (using verl's built-in preprocessing or auto-generating one for an unknown HuggingFace dataset), picks a compute target (local GPU, local Slurm login node, or remote Slurm via ssh), provisions the environment, launches the training job, monitors it to terminal status, and writes a summary report.
+This harness drives an LLM agent through the full lifecycle of a [verl](https://github.com/volcengine/verl) training run: it reads the user's training intent (which algorithm, which dataset, which model, what compute), locates the right recipe inside the verl checkout, prepares the dataset (using verl's built-in preprocessing or auto-generating one for an unknown HuggingFace dataset), picks a compute target (local GPU, local Slurm login node, or remote Slurm via ssh), provisions the environment, launches the training job, monitors it to terminal status, and writes a summary report. When the user opts into refinement at intake, a bounded `reflect` loop diagnoses the finished run against the target metric and re-enters configuration with an approved knob delta, at most `max_iterations` times.
 
 **Authority rule:** `states/*.md` is the single source of truth for FSM control flow. This overview is a human-readable projection. After changing a state or transition, run `python tools/validate_harness.py .` and update this projection when the visible flow changed.
 
@@ -34,7 +34,7 @@ The behaviour each item references has been **verified against `/Users/steven/ve
 - **The verl source code itself.** The harness reads and drives verl as-is. It never edits `verl/` or any trainer code. If a bug fix needs source changes, that belongs in the verl repo, not here.
 - **`verl/trainer/distillation/`** — knowledge-distillation training flows. The harness can bind to `examples/on_policy_distillation_trainer/` scripts via recipe search, but it does not yet model the distillation-specific intent fields (teacher model / temperature / distillation loss weights).
 - **NPU / Ascend specifics.** `examples/ascend_extras/`, `requirements-npu.txt`, `docker/ascend/` exist; the harness auto-detects `DEVICE` via `python3 -c 'import torch_npu'` and otherwise treats NPU as a pass-through (the underlying recipe handles it). Site-specific NPU provisioning (HCCL env vars, `npu-smi` health checks beyond the basic probe) is not modelled.
-- **Hyperparameter sweeps.** `examples/tuning/` exists in verl; this harness drives **one** set of hyperparameters per run. Multi-config sweeps are the user's job (or a future meta-harness over this one).
+- **Hyperparameter sweeps.** `examples/tuning/` exists in verl; this harness drives **one** set of hyperparameters per iteration. The bounded `reflect` loop (opt-in, sequential, at most `max_iterations` evidence-linked deltas) is in scope; parallel multi-config sweeps remain the user's job (or a future meta-harness over this one).
 - **Long-running online inference services.** `run_generate` supports bounded batch generation; lifecycle management for a persistent public serving endpoint remains out of scope.
 - **Docker / container builds.** `docker/Dockerfile.stable.vllm`, `docker/Dockerfile.stable.sglang`, etc. exist; the harness assumes the user has a working `python -c 'import verl'` and does not build or push containers.
 - **Megatron parallelism design decisions.** TP / PP / CP / DP splits come from the chosen recipe's defaults; the harness passes user-supplied `--nodes` / `--gpus-per-node` through but does not advise on the parallelism mix.
@@ -131,8 +131,17 @@ When you have a verl checkout, a dataset (named or referenceable by HuggingFace 
 ┌──────────────────┐
 │    summarize     │  status-branched report: success / crashed (+remediation) /
 │                  │  preempted (+resume cmd) / cancelled
-└─────┬────────────┘
-      ▼
+└─────┬──────┬─────┘
+      │      │ (refine block in training_intent.md)
+      │      ▼
+      │  ┌──────────────────┐
+      │  │     reflect      │  closed-loop refinement: diagnose the finished
+      │  │                  │  iteration vs the target; approved ≤3-knob delta
+      │  │                  │  ──▶ back to configure_algorithm (bounded,
+      │  │                  │  max_iterations); otherwise stop ↓ and write
+      │  │                  │  workspace/reflect/reflect_report.md
+      │  └─────┬────────────┘
+      ▼        ▼
 ┌──────────────────┐
 │    finalize      │  terminal — final_report.md + artefact pointers
 └──────────────────┘
@@ -183,7 +192,7 @@ At least one of `slurm.access` / `ssh.exec` / `gpu.access` must be present, or n
 ## Notes
 
 - **Paths.** The harness assumes a verl checkout exists somewhere on disk and refers to it as `VERL_ROOT`. The user passes it in via the invocation (e.g., "run the harness with verl at /opt/verl") or by setting the `VERL_HOME` env var. If neither is set, `intake` asks. All references to verl's example scripts, slurm templates, and `verl.trainer.main_*` modules are anchored to `VERL_ROOT`. The reference verl checkout used to validate this harness's claims is `/Users/steven/verl`.
-- **Workspace layout.** All run artefacts live under `runs/<run_id>/workspace/`. Canonical state areas are `intake/`, `recipe/`, `algorithm/`, `dataset/`, `reward/`, `compute/`, `env/`, `sanity/`, `job/`, `logs/`, `summary/`, `generate/`, and `eval/`; `states/finalize.md` declares every accepted terminal artefact. The training job's own outputs remain under the user-selected `output_dir`; the workspace records paths rather than copying checkpoints or Slurm logs.
+- **Workspace layout.** All run artefacts live under `runs/<run_id>/workspace/`. Canonical state areas are `intake/`, `recipe/`, `algorithm/`, `dataset/`, `reward/`, `compute/`, `env/`, `sanity/`, `job/`, `logs/`, `summary/`, `reflect/`, `generate/`, and `eval/`; `states/finalize.md` declares every accepted terminal artefact. The training job's own outputs remain under the user-selected `output_dir`; the workspace records paths rather than copying checkpoints or Slurm logs.
 - **Honesty over impressiveness.** If the training job OOM-crashes, the summary says so plainly. If only one step ran before a NaN, the summary reports the one step. The harness must never fabricate a metric, a checkpoint path, or a "success" verdict that didn't happen.
 - **Cost awareness.** Training jobs can cost hundreds of GPU-hours. Before `launch_training` actually fires the job (if HITL is allowed), the agent must present the final launch command and the expected node-hours and ask the user to confirm.
 - **Cancellation.** During `monitor_training`, if the user sends a stop signal (or `--cancel` is set externally), the agent issues `scancel` (Slurm) or kills the local process and writes a `cancelled` summary.

@@ -23,7 +23,10 @@ python tools/validate_harness.py .
 ```
 train: intake → locate_recipe → configure_algorithm → prepare_data ⇄ generate_preprocess
               → configure_reward → select_compute → provision_env → sanity_rollout
-              → launch_training → monitor_training → summarize → finalize
+              → launch_training → monitor_training → summarize → [reflect] → finalize
+
+refine: summarize → reflect → configure_algorithm   (opt-in closed loop; bounded
+        by the declared `**Loop:** max_iterations` on the back-edge)
 
 post-train: intake → run_generate → [run_eval] → finalize
             intake → run_eval → finalize
@@ -63,6 +66,7 @@ verl-harness/
 │   ├── run_generate.md              — batch generation (main_generation_server)
 │   ├── run_eval.md                  — offline scoring (main_eval; CPU-only)
 │   ├── summarize.md
+│   ├── reflect.md                   — closed-loop refinement (opt-in, bounded knob deltas)
 │   └── finalize.md
 ├── skills/
 │   ├── intake/             — canonical training-intent fields, how to elicit them

@@ -15,10 +15,10 @@ The harness is a finite state machine. **`states/*.md` is the single source of t
 ```
 intake → locate_recipe → configure_algorithm → prepare_data ⇄ generate_preprocess
        → configure_reward → select_compute → provision_env → sanity_rollout
-       → launch_training → monitor_training → summarize → finalize
+       → launch_training → monitor_training → summarize → [reflect] → finalize
 ```
 
-`intake` also dispatches resume, generation, and evaluation goals. All normal and failure branches converge on `finalize` through the terminal-input contract declared in `states/finalize.md`.
+`intake` also dispatches resume, generation, and evaluation goals. All normal and failure branches converge on `finalize` through the terminal-input contract declared in `states/finalize.md`. The opt-in `reflect` loop (`summarize → reflect → configure_algorithm`, bounded by the `**Loop:** max_iterations` declaration on the back-edge) and the dataset bounce are the only cycles; the validator rejects any undeclared cycle.
 
 Two kinds of files:
 
@@ -52,6 +52,7 @@ workspace/job/job_info.md                ← target, pid|slurm_jobid, cmd, log p
 workspace/job/job_status.md              ← success | crashed | preempted | cancelled
 workspace/logs/{job_log.md, progress.csv, anomalies.md, crash_tail.md}
 workspace/summary/summary.md
+workspace/reflect/{refinement_plan.md,reflect_report.md,loop_state.json}
 workspace/generate/{generate_report.md,generate_failed.md}
 workspace/eval/{eval_report.md,eval_failed.md}
 workspace/final_report.md
@@ -71,12 +72,12 @@ These bind every state and override any specific instruction that conflicts:
 
 ## Conventions when editing the specs
 
-- **Preserve the state-file schema.** Required H2 sections: `## Description`, `## Skills`, `## Hand-off Points`, `## Next States`. (The dashboard parser at `web/src/verl_harness_web/parser.py` accepts the older `## Human Checkpoints` for back-compat, but new state files should use `## Hand-off Points`.) Each `### <next-state>` under `## Next States` must have a `**Condition:**` and a `**Deliverables:**` block. Skip a section only when truly inapplicable (e.g., `finalize.md` has no `## Next States` — the comment in that file explains why).
+- **Preserve the state-file schema.** Required H2 sections: `## Description`, `## Skills`, `## Hand-off Points`, `## Next States`. (The dashboard parser at `web/src/verl_harness_web/parser.py` accepts the older `## Human Checkpoints` for back-compat, but new state files should use `## Hand-off Points`.) Each `### <next-state>` under `## Next States` must have a `**Condition:**` and a `**Deliverables:**` block. A transition that closes a cycle must additionally carry a `**Loop:** max_iterations: <n>` line between its `**Condition:**` and `**Deliverables:**` blocks. Skip a section only when truly inapplicable (e.g., `finalize.md` has no `## Next States` — the comment in that file explains why).
 - **Workspace paths are part of the contract.** `workspace/intake/training_intent.md` is referenced by name from multiple downstream states; renaming it requires updating every reader. Same for `recipe.md`, `dataset.md`, `compute_choice.md`, `job_info.md`, `job_status.md`.
 - **State vs skill placement.** Concrete rules, regex sets, tables of options, command templates → skill. Control flow, transition conditions, deliverables, HITL points → state. If a state file starts accumulating regexes or detail tables, that's the signal to move them into a skill.
 - **Polling cadences are minimums, not targets.** 30 s / 60 s / 90 s for local-direct / local-slurm / ssh-slurm. Don't propose faster polling — it spams `squeue` and annoys cluster admins.
 - **No new trainer registry.** Resist any change that turns the algorithm field into an enum or a hand-curated list. The harness's commitment is to try whatever the user names and halt honestly on miss.
-- **Validate every FSM edit.** Run `python tools/validate_harness.py .`. It checks the state schema, transition targets and deliverables, reachability, terminal convergence, skill references, and `finalize` terminal-input coverage.
+- **Validate every FSM edit.** Run `python tools/validate_harness.py .`. It checks the state schema, transition targets and deliverables, reachability, terminal convergence on the loop-free graph, declared-loop bounds (undeclared cycles are rejected; declared loop edges must close a real cycle), skill references, and `finalize` terminal-input coverage.
 
 ## Invocation
 

@@ -24,7 +24,7 @@ const S = {
   runOrdinal: null,
   smoothing: 0,                      // 0..0.95 EMA factor (c)
   xAxisKey: 'training/global_step',  // (c)
-  mapMode: 'phase',                  // 'phase' (5 nodes, default) | 'stage' (FSM for goal) | 'all' (15)
+  mapMode: 'phase',                  // 'phase' (6 nodes, default) | 'stage' (FSM for goal) | 'all' (16)
   goal: 'train',                     // (a) derived from training_intent.md
   runId: '',                         // user-picked run from #run-select; '' = latest by mtime
   runsList: [],                      // cached list from /api/runs
@@ -44,14 +44,14 @@ const TRACK_STATES = {
   train: ['intake', 'locate_recipe', 'configure_algorithm', 'prepare_data',
           'generate_preprocess', 'configure_reward', 'select_compute',
           'provision_env', 'sanity_rollout', 'launch_training',
-          'monitor_training', 'summarize', 'finalize'],
+          'monitor_training', 'summarize', 'reflect', 'finalize'],
   resume_monitor: ['intake', 'monitor_training', 'summarize', 'finalize'],
   resume_train:   ['intake', 'launch_training', 'monitor_training', 'summarize', 'finalize'],
   generate:       ['intake', 'select_compute', 'provision_env', 'run_generate', 'finalize'],
   eval:           ['intake', 'run_eval', 'finalize'],
 };
 
-/* ─── (a2) phase view — collapses the 13-state FSM into 5 user-visible phases.
+/* ─── (a2) phase view — collapses the 14-state train track into 6 user-visible phases.
    When mapMode === 'phase' the graph renders these as 5 nodes (the default).
    A phase's status aggregates from its members: any live → live; if all visited
    → visited; if it contains a terminal that's reached → terminal. Click → first
@@ -65,7 +65,7 @@ const PHASES = {
                                                    'configure_reward'] },
     { id: 'compute',  label: 'Compute',  members: ['select_compute', 'provision_env', 'sanity_rollout'] },
     { id: 'train',    label: 'Train',    members: ['launch_training', 'monitor_training'] },
-    { id: 'report',   label: 'Report',   members: ['summarize'] },
+    { id: 'report',   label: 'Report',   members: ['summarize', 'reflect'] },
     { id: 'done',     label: 'Done',     members: ['finalize'] },
   ],
 };
@@ -729,7 +729,7 @@ async function renderGraph() {
   if (trackLbl) {
     const visibleCount = (TRACK_STATES[S.goal] || []).length;
     trackLbl.innerHTML = S.mapMode === 'all'
-      ? `<em>all states</em> · 15`
+      ? `<em>all states</em> · 16`
       : `track <em>${esc(S.goal)}</em> · ${visibleCount} states`;
   }
   const overview = S.harness.overview_node;

@@ -39,8 +39,10 @@ def _edge_label(source: str, cond: str, target: str, terminals: set[str]) -> tup
         return m.group(1), False                       # intake fan-out → goal name
     if target == "generate_preprocess" or "unknown" in c or "hf dataset id" in c:
         return "unknown data", False                   # dataset bounce
+    if source == "reflect" and target == "configure_algorithm":
+        return "refine", False                         # bounded refinement back-edge
     if target in terminals:
-        if source == "summarize":
+        if source in ("summarize", "reflect"):
             return "", False                           # normal end — part of the spine
         if ("succeed" in c or "is written" in c) and "crash" not in c and "fail" not in c:
             return "done", True                        # alternate happy end (generate/eval)
