@@ -9,8 +9,8 @@ Concretely:
 1. **Identify the terminal input.** Use the deliverable on the transition into this state and verify that its canonical file from `## Terminal Inputs` exists. Do not select an older artefact merely because it is also present in a resumed workspace. If the transition context is unavailable, choose the newest canonical terminal-input file by modification time and record that fallback explicitly.
 2. **Read shared context when present.** Read `workspace/intake/training_intent.md` plus any recipe, dataset, compute, environment, job, log, or checkpoint records relevant to the selected terminal input. Missing upstream files are expected for early halts and must not be invented.
 3. **Classify the outcome:**
-   - `completed` — `summary` with job status `success`, `generate_report`, or `eval_report`.
-   - `incomplete` — `summary` with job status `crashed`, `preempted`, or `cancelled`.
+   - `completed` — `summary` with job status `success`, `generate_report`, `eval_report`, or `reflect_report` with stop reason `target_met`.
+   - `incomplete` — `summary` with job status `crashed`, `preempted`, or `cancelled`, or `reflect_report` with any other stop reason.
    - `failed` — any `*_failed`, `algorithm_unsupported`, or `gpu_budget_exceeded` input.
 4. **Write `workspace/final_report.md`** with:
    - outcome and terminal stage;
@@ -29,6 +29,7 @@ Concretely:
 - **Early training halt (`algorithm_unsupported`, `gpu_budget_exceeded`, `env_failed`, `sanity_failed`, `launch_failed`).** State plainly that training never started, except when `sanity_failed` spent a bounded sanity probe; in that case say that full training never started. Include the exact failed gate and unblock action.
 - **Generation (`generate_report` / `generate_failed`).** Report output parquet path and row count only when verified. Do not imply that training occurred in this run.
 - **Evaluation (`eval_report` / `eval_failed`).** Report scores verbatim by `data_source` on success. On failure, report no aggregate score unless the terminal input explicitly labels it partial.
+- **Refinement loop (`reflect_report`).** Report the per-iteration history verbatim (delta, diagnosis, metric), the stop reason, and the best iteration's checkpoint path. Never present `budget_exhausted` or `no_further_delta` as success.
 
 ## Terminal Inputs
 
@@ -44,6 +45,7 @@ Every transition into `finalize` must deliver exactly one of these names at the 
 - `generate_failed` — `workspace/generate/generate_failed.md` — generation crashed or timed out.
 - `eval_report` — `workspace/eval/eval_report.md` — standalone or chained evaluation completed.
 - `eval_failed` — `workspace/eval/eval_failed.md` — standalone or chained evaluation failed.
+- `reflect_report` — `workspace/reflect/reflect_report.md` — closed-loop refinement ended; per-iteration history and stop reason.
 
 ## Skills
 

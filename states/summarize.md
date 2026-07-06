@@ -63,9 +63,17 @@ Concretely:
 
 ## Next States
 
+### reflect
+
+**Condition:** `workspace/summary/summary.md` is written AND `workspace/intake/training_intent.md` contains a `refine` block (the user opted into closed-loop refinement at intake). Fires regardless of terminal status — a crashed iteration is diagnosable too; `reflect` decides whether the loop continues or stops.
+
+**Deliverables:**
+
+- summary: `workspace/summary/summary.md` — the status-branched run report for the finished iteration, the evidence `reflect` diagnoses against.
+
 ### finalize
 
-**Condition:** `workspace/summary/summary.md` is written.
+**Condition:** `workspace/summary/summary.md` is written and no `refine` block exists in `workspace/intake/training_intent.md` (the default, single-iteration path).
 
 **Deliverables:**
 

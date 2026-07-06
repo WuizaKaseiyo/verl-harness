@@ -4,6 +4,11 @@
 The state files are the authoritative FSM definition.  README.md,
 task-overview.md, and the dashboard are views over that definition; this
 validator deliberately does not infer transitions from those views.
+
+Cycles are allowed only when explicitly declared: the transition that closes
+the cycle must carry a `**Loop:** max_iterations: <n>` line between its
+`**Condition:**` and `**Deliverables:**` blocks. The graph minus declared
+loop edges must be acyclic and still drain every state into `finalize`.
 """
 from __future__ import annotations
 
@@ -35,11 +40,13 @@ def parse_transitions(block: str) -> list[dict]:
         end = matches[index + 1].start() if index + 1 < len(matches) else len(block)
         body = block[match.end():end]
         condition = re.search(
-            r"\*\*Condition:\*\*\s*(.+?)(?=\n\n\*\*Deliverables:\*\*|$)",
+            r"\*\*Condition:\*\*\s*(.+?)(?=\n\n\*\*(?:Loop|Deliverables):\*\*|$)",
             body,
             re.DOTALL,
         )
         deliverables_block = re.search(r"\*\*Deliverables:\*\*\s*(.+)$", body, re.DOTALL)
+        loop_heading = re.search(r"\*\*Loop:\*\*", body)
+        loop_bound = re.search(r"\*\*Loop:\*\*\s*max_iterations:\s*([1-9][0-9]*)\b", body)
         deliverables: list[tuple[str, str]] = []
         if deliverables_block:
             for line in deliverables_block.group(1).splitlines():
@@ -52,6 +59,8 @@ def parse_transitions(block: str) -> list[dict]:
                 "condition": condition.group(1).strip() if condition else "",
                 "deliverables": deliverables,
                 "has_deliverables_heading": deliverables_block is not None,
+                "has_loop_heading": loop_heading is not None,
+                "loop_bound": int(loop_bound.group(1)) if loop_bound else None,
             }
         )
     return transitions
@@ -92,12 +101,21 @@ def validate(root: Path) -> list[str]:
                 errors.append(f"{label}: missing `**Deliverables:**`")
             elif not transition["deliverables"]:
                 errors.append(f"{label}: deliverables block has no `- name: description` item")
+            if transition["has_loop_heading"] and transition["loop_bound"] is None:
+                errors.append(f"{label}: `**Loop:**` must declare `max_iterations: <positive integer>`")
 
     state_names = set(states)
     for name, state in states.items():
         for transition in state["transitions"]:
             if transition["target"] not in state_names:
                 errors.append(f"states/{name}.md: transition target does not exist: `{transition['target']}`")
+
+    loop_edges = {
+        (name, transition["target"])
+        for name, state in states.items()
+        for transition in state["transitions"]
+        if transition["loop_bound"] is not None
+    }
 
     overview = (root / "task-overview.md").read_text(encoding="utf-8")
     overview_sections = split_h2(overview)
@@ -123,9 +141,14 @@ def validate(root: Path) -> list[str]:
     if terminals != {"finalize"}:
         errors.append(f"FSM must have exactly one terminal state `finalize`; found {sorted(terminals)}")
 
+    # Terminal convergence must hold on the loop-free subgraph: once every
+    # declared loop bound is exhausted, the remaining edges must still drain
+    # every state into `finalize`.
     reverse: dict[str, set[str]] = defaultdict(set)
     for name, state in states.items():
         for transition in state["transitions"]:
+            if (name, transition["target"]) in loop_edges:
+                continue
             reverse[transition["target"]].add(name)
     can_finish = {"finalize"} if "finalize" in state_names else set()
     queue = deque(can_finish)
@@ -136,7 +159,67 @@ def validate(root: Path) -> list[str]:
                 can_finish.add(source)
                 queue.append(source)
     for name in sorted(state_names - can_finish):
-        errors.append(f"states/{name}.md: no path reaches `finalize`")
+        errors.append(f"states/{name}.md: no loop-free path reaches `finalize`")
+
+    # Every cycle must be broken by an explicitly declared, bounded loop edge
+    # (`**Loop:** max_iterations: <n>` on the transition). Kahn's algorithm on
+    # the non-loop subgraph: any state left over sits on an undeclared cycle.
+    indegree = {name: 0 for name in state_names}
+    forward: dict[str, set[str]] = defaultdict(set)
+    for name, state in states.items():
+        for transition in state["transitions"]:
+            target = transition["target"]
+            if target in state_names and (name, target) not in loop_edges and target not in forward[name]:
+                forward[name].add(target)
+                indegree[target] += 1
+    queue = deque(name for name in sorted(state_names) if indegree[name] == 0)
+    acyclic = set()
+    while queue:
+        current = queue.popleft()
+        acyclic.add(current)
+        for target in sorted(forward[current]):
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                queue.append(target)
+    cyclic = state_names - acyclic
+    # Kahn's leftover also contains states merely downstream of a cycle;
+    # repeatedly strip states with no outgoing edge back into the leftover so
+    # only actual cycle members are reported.
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted(cyclic):
+            if not any(target in cyclic for target in forward[name]):
+                cyclic.discard(name)
+                changed = True
+    for name in sorted(cyclic):
+        errors.append(
+            f"states/{name}.md: part of an undeclared cycle; mark the intended "
+            f"back-edge with `**Loop:** max_iterations: <n>`"
+        )
+
+    # A declared loop edge must actually close a cycle, so `**Loop:**` markers
+    # cannot rot into no-ops: the target must be able to reach the source.
+    for source, target in sorted(loop_edges):
+        if target not in state_names:
+            continue
+        seen = {target}
+        queue = deque([target])
+        closes = False
+        while queue:
+            current = queue.popleft()
+            if current == source:
+                closes = True
+                break
+            for transition in states[current]["transitions"]:
+                nxt = transition["target"]
+                if nxt in state_names and nxt not in seen:
+                    seen.add(nxt)
+                    queue.append(nxt)
+        if not closes:
+            errors.append(
+                f"states/{source}.md -> {target}: declared loop edge does not close a cycle"
+            )
 
     final_sections = states.get("finalize", {}).get("sections", {})
     terminal_inputs = {
@@ -182,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- {error}", file=sys.stderr)
         return 1
     count = len(list((root / "states").glob("*.md")))
-    print(f"OK: {count} states; schema, graph, skills, and terminal contracts valid")
+    print(f"OK: {count} states; schema, graph, loops, skills, and terminal contracts valid")
     return 0
 
 

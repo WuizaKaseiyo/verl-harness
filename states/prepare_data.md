@@ -52,7 +52,9 @@ Concretely:
 
 ### generate_preprocess
 
-**Condition:** The dataset is an HF dataset id (or otherwise unknown) and no preprocess script exists for it in the verl registry. (Branch (c) above.)
+**Condition:** The dataset is an HF dataset id (or otherwise unknown) and no preprocess script exists for it in the verl registry. (Branch (c) above.) After `generate_preprocess` returns, the dataset counts as known, so this branch cannot re-fire.
+
+**Loop:** max_iterations: 1
 
 **Deliverables:**
 
