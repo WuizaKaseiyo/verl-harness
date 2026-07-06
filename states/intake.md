@@ -30,6 +30,7 @@ Concretely:
    - `scale` — number of nodes, GPUs per node, train batch size, mini-batch size, max prompt/response length, and `gpu_cap` (the max GPUs the account may request in one allocation — clusters commonly cap this, e.g. 4). If the user did not specify nodes / gpus_per_node, leave them blank: `select_compute` will **estimate** the GPU count from model size + algorithm via `skills/gpu_budget` (capped by `gpu_cap`), rather than inheriting a guess. Other scale knobs fall back to the recipe defaults in `locate_recipe`.
    - `output_dir` — absolute path where training will write its checkpoints / logs. If not provided, default to `<VERL_ROOT>/outputs/<run_id>/` and record that.
    - `wandb` — optional: `wandb.project`, `wandb.entity`, `wandb.run_name`. If unset, training launches with wandb disabled.
+   - `refine` — optional block; its presence opts the run into the bounded closed-loop refinement stage (`reflect`, entered after `summarize`). Fields: `refine.target_metric` (a `workspace/logs/progress.csv` column or a val metric the trainer logs, e.g. `val-core/openai/gsm8k/acc/mean@1`), `refine.target_value` (the number to reach), `refine.max_iterations` (≥ 1; values above the FSM bound declared on the `reflect → configure_algorithm` transition are clamped to that bound, and the clamp is recorded in `loop_state.json`). If the user asks for refinement but any field is unset, ask — never guess a target. Omit the block entirely when the user did not ask for refinement: its absence is what routes `summarize → finalize` directly.
    - `hf_token` — required if pulling a gated model or dataset. Pull from `$HF_TOKEN` env var by default; ask if missing and the user's spec needs it.
 4. **Confirm with the user** (HITL checkpoint). Show the normalised intent and ask: *"Is this what you want? Edit any field or confirm."*
 5. **Write `workspace/intake/training_intent.md`** with the confirmed, structured fields. Every subsequent state reads this file.
@@ -54,7 +55,7 @@ The transition fires per `goal`. Exactly one of the five branches below applies.
 
 **Deliverables:**
 
-- training_intent: The structured training spec — goal, algorithm, model, dataset, compute_pref, scale knobs, output_dir, wandb config, hf_token-source — written as a key/value markdown document.
+- training_intent: The structured training spec — goal, algorithm, model, dataset, compute_pref, scale knobs, output_dir, wandb config, optional refine block, hf_token-source — written as a key/value markdown document.
 - verl_root: The confirmed absolute path to the verl checkout, recorded both as a field in training_intent.md and on its own at `workspace/intake/verl_root.txt` for downstream states that just need the path.
 
 ### monitor_training

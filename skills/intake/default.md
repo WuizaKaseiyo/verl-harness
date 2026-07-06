@@ -24,6 +24,9 @@ These are the fields every downstream state reads from `workspace/intake/trainin
 | `total_epochs` | no | user | inherit recipe default |
 | `output_dir` | no | user | `<verl_root>/outputs/<run_id>/` |
 | `seed` | no | user | `1` |
+| `refine.target_metric` | conditional | user | required when the user asks for closed-loop refinement; a `progress.csv` column or logged val metric — never guessed |
+| `refine.target_value` | conditional | user | required with `refine.target_metric` |
+| `refine.max_iterations` | no | user | `3` when a refine block exists (clamped to the FSM bound on `reflect → configure_algorithm`); no refine block → no loop |
 | `wandb.enabled` | no | user | `false` |
 | `wandb.project` | conditional | user | required if wandb.enabled |
 | `wandb.run_name` | no | user | `<algorithm>-<model_slug>-<dataset_slug>` |
