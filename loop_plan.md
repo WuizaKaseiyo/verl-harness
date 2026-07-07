@@ -53,11 +53,21 @@ First command on the server (must print exactly this):
 ## 2. Seed matrix
 
 Six runs were originally planned. **Descoped 2026-07-06** to a ~30 GPU-hour
-demonstration budget (user decision at the S2 recipe gate, recorded in
-`experiment_progress.md`): run **S2 → S6 → S5 only**; S1 is an optional
-add-back (~5 GPU-h) if those three land under budget; **S3 and S4 are out of
-scope**. §5.6 now reads as a single-seed demonstration (N=1, plus both
-controls), not a four-fault-class study. S2 remains the headline.
+demonstration budget (user decision at the S2 recipe gate): run **S2 → S6 →
+S5 only**. **Re-scoped 2026-07-07** after those three completed under budget:
+the user granted **+16–20 GPU-h** to strengthen the Loop A evidence. Add-back
+order: **S4** (crash-recovery branch; fault knob adapted — see below), **S1**
+(SFT/MATH lr fault; second algorithm family), then **S3 only if ≤ 20 GPU-h
+remains** (disclosed risk: S2-i1's much stronger fault missed 0.90 by only
+0.009, so `rollout.n=2` plausibly still reaches the target and would report
+`target_met` at iteration 1 — honest, but not a fault-fix datapoint).
+
+**S4 fault-knob adaptation (recorded):** the planned
+`ppo_micro_batch_size_per_gpu` fault is inert in the matched recipe — it sets
+`actor.use_dynamic_bsz=True`, which bypasses that knob. The in-table knob
+that reliably OOMs is `actor_rollout_ref.rollout.gpu_memory_utilization`
+0.4 → 0.9 (vLLM reserves ~72 G + ~14 G FSDP state > 80 G per GPU); reflect's
+OOM remediation in `skills/training_monitor` maps directly to it.
 
 | id | track | seeded fault (knob) | refine block | expected loop behaviour |
 |---|---|---|---|---|
