@@ -23,3 +23,6 @@ venv/
 experiment_design.md
 experiment_progress.md
 experiment_summary.md
+
+# Loop A bring-back archive (travels out-of-band per loop_plan.md §6)
+loopa-runs.tgz

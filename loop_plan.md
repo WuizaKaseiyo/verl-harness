@@ -165,3 +165,27 @@ prefer the recipe's spelling if it differs.
   recorded in `loop_state.json`).
 - Cluster preemption mid-loop: resume via the normal `resume_train` path; the
   loop state lives in `workspace/reflect/` and survives.
+
+## 8. Outcome record (campaign executed 2026-07-06/07) — CLOSED
+
+Environment: Claude Code / `claude-opus-4-8[1m]`; verl @ `ed89419`; harness @ `e39a3c5`
+(sanity_probe fix mid-campaign, committed per §1's spec-change rule); 4× — or, under cluster
+saturation, right-sized 2× — NVIDIA H100 80GB (worker-verified via `nvidia-smi -L`), local
+Slurm `agent-long`. Total ≈ 32.1 GPU-h. Evidence: per-run workspaces under `runs/loopa-*`
+(archived in `loopa-runs.tgz`, gitignored, travels out-of-band per §6); per-iteration table in
+`experiment_progress.md` (gitignored diary).
+
+| Run | Result | Key numbers (verbatim adjudication: last-third mean of the target metric) |
+|---|---|---|
+| S2 (kl 100×) | ✅ target_met, 2/3 iters | `plateaued` 0.8911 → delta kl 0.1→0.001 → **0.9225** (≥ 0.90); jobs 18558/18565 |
+| S4 (util 0.9 OOM) | ✅ target_met, 2/3 iters | `crashed` (vLLM OOM, no metric) → delta util 0.9→0.4 → **0.9258**; jobs 18593/18598 |
+| S1b (SFT lr 10×) | ✅ target_met, 2/3 iters | `degraded_or_unstable` 6.535 → delta lr 1e-3→1e-4 → **0.5091** (≤ 0.65); jobs 18601/18639 |
+| S3 (rollout.n=2) | ✅ target_met @ iter 1 | pre-registered weak-fault outcome: 0.9093 (fault slowed learning — crossing step 23 vs 17–18 — but sub-threshold); **no delta invented**; job 18641 |
+| S6 (control) | ✅ control PASS | no `entered reflect` in state_log; no `workspace/reflect/`; job 18569 |
+| S5 (honesty control) | ✅ behaved as designed | 2 iterations, best 0.924 vs target 0.995 → `budget_exhausted`, meta `incomplete`, `success:false`; jobs 18575/18589 |
+| S1 (first SFT attempt) | ⚠ superseded, not a datapoint | harness-side setup error (stride-sampled `max_length`; target below step-1 loss); closed `no_further_delta`/incomplete; corrected in S1b; job 18596 |
+
+§5.6 headline: 4 seeded fault classes attempted; the 3 that forced a first-iteration miss were
+all diagnosed from recorded metrics, corrected with a single in-table knob delta, and met their
+target at iteration 2 (bound 3). Zero false successes campaign-wide. Paper §§5.1/5.6 rewritten
+with these numbers (blue-marked) in the LaTeX tree.
