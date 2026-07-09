@@ -22,7 +22,8 @@ from starlette.staticfiles import StaticFiles
 
 from .parser import (parse_harness, parse_state_log, read_anomalies,
                      read_job_info, read_job_log_tail, read_job_status,
-                     read_progress, read_progress_csv, read_summary)
+                     read_progress, read_progress_csv, read_reflect_state,
+                     read_summary)
 from .render import (OVERVIEW_NODE, compile_overview, compile_skill_folder,
                      compile_state, harness_to_mermaid)
 
@@ -237,6 +238,13 @@ def create_app(harness_root: Path, live: bool = True) -> Starlette:
             return JSONResponse({"summary": ""})
         return JSONResponse({"summary": read_summary(run)})
 
+    async def api_reflect(request: Request):
+        h = parse_harness(harness_root)
+        run = _resolve_run(h, request)
+        if run is None:
+            return JSONResponse({"present": False})
+        return JSONResponse(read_reflect_state(run))
+
     # ---------- SSE live stream --------------------------------------------
     async def events(_: Request):
         async def stream():
@@ -271,6 +279,7 @@ def create_app(harness_root: Path, live: bool = True) -> Starlette:
         Route("/api/job", api_job),
         Route("/api/logs", api_logs),
         Route("/api/summary", api_summary),
+        Route("/api/reflect", api_reflect),
         Route("/events", events),
         Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"),
     ]

@@ -505,3 +505,35 @@ def read_summary(run: Path) -> str:
     if p2.exists():
         return p2.read_text(encoding="utf-8")
     return ""
+
+
+def read_reflect_state(run: Path) -> dict:
+    """Read workspace/reflect/{loop_state.json,refinement_plan.md,reflect_report.md}.
+
+    Returns {"present": False} when the reflect loop was never activated for this
+    run (no reflect/ dir or no loop_state.json). Otherwise returns the parsed
+    loop-state JSON plus the plan/report markdown contents so the frontend can
+    render one round-trip.
+    """
+    reflect_dir = run / "workspace" / "reflect"
+    state_path = reflect_dir / "loop_state.json"
+    if not state_path.exists():
+        return {"present": False}
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"present": False}
+
+    def _read(name: str) -> str:
+        p = reflect_dir / name
+        try:
+            return p.read_text(encoding="utf-8") if p.exists() else ""
+        except Exception:
+            return ""
+
+    return {
+        "present": True,
+        "state": state,
+        "refinement_plan": _read("refinement_plan.md"),
+        "reflect_report": _read("reflect_report.md"),
+    }

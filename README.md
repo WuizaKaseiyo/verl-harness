@@ -38,7 +38,7 @@ Three branching axes:
 
 | axis | what the user picks | what the harness does |
 |---|---|---|
-| **algorithm** | `ppo` / `grpo` / `gspo` / `sft` / … | searches `examples/<algo>_trainer/` and `recipe/<algo>_trainer/` in the verl checkout; falls back to `python -m verl.trainer.main_<algo>`. No curated trainer registry — halts honestly when verl has no match. |
+| **algorithm** | `ppo` / `grpo` / `sft` / `distill` / … | searches `examples/<algo>_trainer/` and `recipe/<algo>_trainer/` in the verl checkout; falls back to `python -m verl.trainer.main_<algo>`. No curated trainer registry — halts honestly when verl has no match. GRPO loss-mode variants (`gspo`, `cispo`, `gmpo`, `sapo`, `dppo`) are handled inside `algo_grpo` via `policy_loss.loss_mode`, not as peer algorithms. |
 | **dataset** | a name (gsm8k, math, …), an HF id, or a parquet path | known names bind to verl's preprocess scripts; unknown HF ids route through `generate_preprocess`, which authors a preprocess script from one of verl's templates. |
 | **compute** | `auto` (default), `local-direct`, `local-slurm`, `ssh-slurm` | capability probes (`gpu.access` / `slurm.access` / `ssh.exec`) pick a target. |
 
@@ -58,9 +58,9 @@ verl-harness/
 │   ├── prepare_data.md
 │   ├── generate_preprocess.md
 │   ├── configure_reward.md          — picks reward_kind (rule/model/custom/shaped)
-│   ├── sanity_rollout.md            — load model, run 1 prompt, run reward fn
 │   ├── select_compute.md
 │   ├── provision_env.md
+│   ├── sanity_rollout.md            — load model, run 1 prompt, run reward fn
 │   ├── launch_training.md
 │   ├── monitor_training.md
 │   ├── run_generate.md              — batch generation (main_generation_server)
@@ -126,9 +126,22 @@ is no runner in this repo. Tested with [Claude Code](https://claude.com/claude-c
 uv run --project web verl-harness-web .
 ```
 
-Opens `http://127.0.0.1:8766`. It renders the FSM, progress chart,
-anomalies, job card, and log tail, and can edit `task-overview.md` plus state
-and skill Markdown files. See `web/README.md`.
+Opens `http://127.0.0.1:8766`. Four tabs — **task**, **progress**,
+**workflow**, **terminal** — cover:
+
+- **task** — three collapsible groups (overview / states / skills) with
+  inline Markdown rendering and edit-in-place for `task-overview.md`,
+  every `states/*.md`, and every `skills/**/*.md`.
+- **progress** — wandb-style panel grid grouped by metric namespace,
+  anomaly strip, job card, and (when the run has activated the closed
+  loop) a **reflect card** showing iteration / bound, per-iter deltas,
+  best checkpoint, `stop_reason`, and inlined `refinement_plan.md` +
+  `reflect_report.md`.
+- **workflow** — the FSM diagram at three zoom levels (phases · 5 /
+  stages · 14 / all · 16).
+- **terminal** — raw job-log tail (debug-only).
+
+See `web/README.md`.
 
 ## What it does NOT do
 

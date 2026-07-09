@@ -28,6 +28,7 @@ const S = {
   goal: 'train',                     // (a) derived from training_intent.md
   runId: '',                         // user-picked run from #run-select; '' = latest by mtime
   runsList: [],                      // cached list from /api/runs
+  navExpanded: { overview: true, states: false, skills: false },
 };
 
 /* Append ?run_id=… (or &run_id=…) to a per-run endpoint when the user has
@@ -355,6 +356,10 @@ async function refreshMetrics() {
     const a = await getJSON(scoped('/api/anomalies'));
     renderAnomalies(a.anomalies || []);
   } catch (_) {}
+  try {
+    const r = await getJSON(scoped('/api/reflect'));
+    renderReflectCard(r);
+  } catch (_) {}
 }
 
 /* EMA smoothing of a numeric series; alpha=0 means raw. */
@@ -557,6 +562,90 @@ function panelChartConfig(datasets, xLabel) {
     },
   };
 }
+/* ── reflect (closed-loop refinement) card ────────────────────────────────
+   Only rendered when the run activated the reflect loop (workspace/reflect/
+   exists). Shows iter counter, target status, per-iter delta rows, and
+   the plan/report artefact contents behind a details toggle. */
+function renderReflectCard(r) {
+  const el = $('#reflect-card');
+  if (!el) return;
+  if (!r || !r.present) { el.hidden = true; el.innerHTML = ''; return; }
+
+  const s = r.state || {};
+  const history = Array.isArray(s.history) ? s.history : [];
+  const iter = s.iteration ?? history.length;
+  const cap = s.max_iterations ?? '?';
+
+  // Pill classification: target_met | budget_exhausted | in-progress
+  let pillLabel, pillClass;
+  if (s.success === true) {
+    pillLabel = 'target met';
+    pillClass = 'ok';
+  } else if (s.stop_reason) {
+    pillLabel = String(s.stop_reason).replace(/_/g, ' ');
+    pillClass = 'stop';
+  } else {
+    pillLabel = 'in progress';
+    pillClass = 'live';
+  }
+
+  const targetLine = s.target_metric
+    ? `target · <code>${esc(s.target_metric)}</code> ≥ <code>${esc(s.target_value ?? '?')}</code>`
+    : '';
+
+  const rows = history.map(h => {
+    const dstr = h.delta === null || h.delta === undefined
+      ? '<span class="reflect-muted">no delta (final iter)</span>'
+      : Object.entries(h.delta).map(([k, v]) => {
+          const oldv = v && v.old !== undefined ? esc(v.old) : '?';
+          const newv = v && v.new !== undefined ? esc(v.new) : '?';
+          return `<code>${esc(k)}</code>: ${oldv} → ${newv}`;
+        }).join('<br>');
+    const metric = h.metric_final_step ?? h.metric_last_third_mean ?? '—';
+    const metricStr = typeof metric === 'number' ? metric.toFixed(4) : esc(metric);
+    return `
+      <tr>
+        <td class="reflect-iter">${esc(h.iteration ?? '?')}</td>
+        <td class="reflect-diag">${esc(h.diagnosis || '—')}</td>
+        <td class="reflect-metric">${metricStr}</td>
+        <td class="reflect-delta">${dstr}</td>
+        <td class="reflect-job">${esc((h.job || '—').split(',')[0])}</td>
+      </tr>`;
+  }).join('');
+
+  const bestLine = s.best_checkpoint
+    ? `<div class="reflect-foot-row">best iter <em>${esc(s.best_iteration ?? '?')}</em> · <code>${esc(s.best_checkpoint)}</code></div>`
+    : '';
+
+  const artefacts = [];
+  if (r.refinement_plan) {
+    artefacts.push(`<details class="reflect-artefact"><summary>refinement_plan.md</summary><div class="markdown">${marked.parse(r.refinement_plan)}</div></details>`);
+  }
+  if (r.reflect_report) {
+    artefacts.push(`<details class="reflect-artefact"><summary>reflect_report.md</summary><div class="markdown">${marked.parse(r.reflect_report)}</div></details>`);
+  }
+
+  el.innerHTML = `
+    <header class="reflect-head">
+      <div class="reflect-title">reflect · closed-loop refinement</div>
+      <div class="reflect-head-meta">
+        <span class="reflect-iter-pill">iter <em>${esc(iter)}</em> / ${esc(cap)}</span>
+        <span class="reflect-pill sev-${pillClass}">${esc(pillLabel)}</span>
+      </div>
+    </header>
+    ${targetLine ? `<div class="reflect-target">${targetLine}</div>` : ''}
+    <table class="reflect-table">
+      <thead><tr>
+        <th>iter</th><th>diagnosis</th><th>metric</th><th>delta applied</th><th>job</th>
+      </tr></thead>
+      <tbody>${rows || `<tr><td colspan="5" class="reflect-empty">no iterations recorded yet</td></tr>`}</tbody>
+    </table>
+    ${bestLine}
+    ${artefacts.length ? `<div class="reflect-artefacts">${artefacts.join('')}</div>` : ''}
+  `;
+  el.hidden = false;
+}
+
 function renderAnomalies(rows) {
   const wrap = $('#anomalies-strip');
   if (!rows.length) { wrap.innerHTML = ''; return; }
@@ -773,20 +862,42 @@ function renderSpecNav() {
   if (!wrap) return;
   const states = S.harness.states || [];
   const skills = S.harness.skills || [];
+
+  const curKind = S.current?.kind;
+  if (curKind === 'overview') S.navExpanded.overview = true;
+  if (curKind === 'state')    S.navExpanded.states   = true;
+  if (curKind === 'skill')    S.navExpanded.skills   = true;
+
+  const openAttr = (k) => S.navExpanded[k] ? ' open' : '';
   const html = [];
-  html.push(`<div class="spec-nav-group">overview</div>`);
+
+  html.push(`<details class="spec-nav-group" data-group="overview"${openAttr('overview')}>`);
+  html.push(`<summary class="spec-nav-summary">overview</summary>`);
+  html.push(`<div class="spec-nav-rows">`);
   html.push(`<div class="spec-nav-row" data-kind="overview" data-id="${esc(S.harness.overview_node)}">task-overview.md</div>`);
-  html.push(`<div class="spec-nav-group">states · ${states.length}</div>`);
+  html.push(`</div></details>`);
+
+  html.push(`<details class="spec-nav-group" data-group="states"${openAttr('states')}>`);
+  html.push(`<summary class="spec-nav-summary">states</summary>`);
+  html.push(`<div class="spec-nav-rows">`);
   for (const name of states) {
     const live = (name === S.run?.current) ? ' <span class="row-sub">live</span>' : '';
     html.push(`<div class="spec-nav-row" data-kind="state" data-id="${esc(name)}">${esc(name)}${live}</div>`);
   }
-  html.push(`<div class="spec-nav-group">skills · ${skills.length}</div>`);
+  html.push(`</div></details>`);
+
+  html.push(`<details class="spec-nav-group" data-group="skills"${openAttr('skills')}>`);
+  html.push(`<summary class="spec-nav-summary">skills</summary>`);
+  html.push(`<div class="spec-nav-rows">`);
   for (const path of skills) {
     const used = S.activeStateSkills.has(path) ? ' <span class="row-sub">·</span>' : '';
     html.push(`<div class="spec-nav-row" data-kind="skill" data-id="${esc(path)}">${esc(path)}${used}</div>`);
   }
+  html.push(`</div></details>`);
+
   wrap.innerHTML = html.join('');
+  wrap.querySelectorAll('details.spec-nav-group').forEach(d =>
+    d.addEventListener('toggle', () => { S.navExpanded[d.dataset.group] = d.open; }));
   wrap.querySelectorAll('.spec-nav-row').forEach(row =>
     row.addEventListener('click', () => {
       const { kind, id } = row.dataset;

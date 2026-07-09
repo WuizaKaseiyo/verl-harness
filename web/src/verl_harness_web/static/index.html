@@ -67,10 +67,10 @@
 
 <!-- ─────────────────── TABS ─────────────────── -->
 <nav class="tabs" aria-label="View switcher">
-  <button class="tab" data-view="metrics"><span class="tab-num">i.</span> metrics</button>
-  <button class="tab" data-view="map"><span class="tab-num">ii.</span> map</button>
-  <button class="tab" data-view="spec"><span class="tab-num">iii.</span> spec</button>
-  <button class="tab" data-view="stream"><span class="tab-num">iv.</span> stream</button>
+  <button class="tab" data-view="spec"><span class="tab-num">i.</span> task</button>
+  <button class="tab" data-view="metrics"><span class="tab-num">ii.</span> progress</button>
+  <button class="tab" data-view="map"><span class="tab-num">iii.</span> workflow</button>
+  <button class="tab" data-view="stream"><span class="tab-num">iv.</span> terminal</button>
   <span class="tabs-spacer"></span>
   <span class="tabs-meta" id="tabs-meta"><em>—</em></span>
 </nav>
@@ -105,6 +105,7 @@
     <div class="panel-grid" id="panel-grid">
       <div class="empty" id="metrics-empty"><em>awaiting first metric dict from the trainer</em></div>
     </div>
+    <section class="reflect-card" id="reflect-card" hidden></section>
     <section class="anomalies-strip" id="anomalies-strip"></section>
   </article>
 
@@ -133,7 +134,7 @@
     <aside class="spec-nav" id="spec-nav"></aside>
     <section class="spec-body">
       <header class="spec-head">
-        <h2 class="spec-title" id="spec-title"><em>spec</em></h2>
+        <h2 class="spec-title" id="spec-title"><em>task</em></h2>
         <div class="spec-actions">
           <span class="save-status" id="save-status"></span>
           <button class="quiet-btn" id="cancel-btn" hidden>cancel</button>
