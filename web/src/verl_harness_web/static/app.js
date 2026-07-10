@@ -29,6 +29,8 @@ const S = {
   runId: '',                         // user-picked run from #run-select; '' = latest by mtime
   runsList: [],                      // cached list from /api/runs
   navExpanded: { overview: true, states: false, skills: false },
+  submitReady: false,
+  submitTasksTimer: null,
 };
 
 /* Append ?run_id=… (or &run_id=…) to a per-run endpoint when the user has
@@ -316,6 +318,13 @@ function setView(name) {
   if (name === 'map')     renderGraph();
   if (name === 'spec')    selectOverview();
   if (name === 'metrics') refreshMetrics();
+  if (name === 'submit')  initSubmit();
+  // Auto-refresh task list only while on submit view; clear otherwise.
+  clearInterval(S.submitTasksTimer);
+  S.submitTasksTimer = null;
+  if (name === 'submit') {
+    S.submitTasksTimer = setInterval(refreshSubmitTasks, 5000);
+  }
 }
 
 /* ════════════════════════════ STREAM ════════════════════════════ */
@@ -1026,6 +1035,139 @@ async function refreshAll() {
   if (S.view === 'metrics') await refreshMetrics();
   if (S.view === 'map')     await renderGraph();
   if (S.view === 'spec')    renderSpecNav();
+  if (S.view === 'submit')  await refreshSubmitTasks();
+}
+
+/* ════════════════════════════ SUBMIT ════════════════════════════ */
+function initSubmit() {
+  refreshSubmitTasks();
+  if (S.submitReady) return;
+  S.submitReady = true;
+  const form = $('#submit-form');
+  if (!form) return;
+  form.addEventListener('submit', onSubmitForm);
+  const fields = ['#f-algo', '#f-model', '#f-dataset', '#f-extra', '#f-hitl'];
+  fields.forEach(sel => { const el = $(sel); if (el) el.addEventListener('input', renderPromptPreview); });
+  $('#tasks-refresh')?.addEventListener('click', refreshSubmitTasks);
+  renderPromptPreview();
+}
+
+function composePromptPreview() {
+  const algorithm = $('#f-algo')?.value?.trim() || '';
+  const model     = $('#f-model')?.value?.trim() || '';
+  const dataset   = $('#f-dataset')?.value?.trim() || '';
+  const extra     = $('#f-extra')?.value?.trim() || '';
+  const hitl      = $('#f-hitl')?.checked;
+  const hitlFlag  = hitl ? 'on' : '--no-hitl';
+  const extraLine = extra ? ` ${extra}` : '';
+  return `Intent: Train ${algorithm} on ${dataset} using ${model}.${extraLine}\nHITL: ${hitlFlag}`;
+}
+function renderPromptPreview() {
+  const el = $('#submit-preview-body');
+  if (el) el.textContent = composePromptPreview();
+}
+
+async function onSubmitForm(ev) {
+  ev.preventDefault();
+  const btn = $('#submit-btn');
+  const status = $('#submit-status');
+  const body = {
+    algorithm: $('#f-algo').value,
+    model:     $('#f-model').value,
+    dataset:   $('#f-dataset').value,
+    extra:     $('#f-extra').value,
+    hitl:      $('#f-hitl').checked,
+  };
+  btn.disabled = true;
+  status.textContent = 'submitting…';
+  try {
+    const r = await fetch('/api/submit', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok || data.error) {
+      status.textContent = `error: ${data.error || r.status}`;
+      toast(data.error || 'submit failed', 'err');
+      return;
+    }
+    status.textContent = `launched · ${data.task_id} · pid ${data.pid}`;
+    toast(`launched ${data.task_id}`, 'ok');
+    await refreshSubmitTasks();
+  } catch (e) {
+    status.textContent = `error: ${e.message || e}`;
+    toast('submit failed', 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function refreshSubmitTasks() {
+  const wrap = $('#submit-tasks');
+  if (!wrap) return;
+  try {
+    const data = await getJSON('/api/tasks');
+    const tasks = data.tasks || [];
+    if (!tasks.length) {
+      wrap.innerHTML = `<p class="empty-prose"><em>no tasks yet</em></p>`;
+      return;
+    }
+    const html = tasks.map(t => {
+      const f = t.form || {};
+      const desc = `${esc(f.algorithm || '?')} · ${esc(f.dataset || '?')} · ${esc(f.model || '?')}`;
+      const sev = {
+        running:  'live',
+        sleeping: 'wait',
+        done:     'ok',
+        failed:   'err',
+        killed:   'stop',
+      }[t.status] || 'stop';
+      const age = t.started_ts ? relTime(t.started_ts) : '—';
+      const deleteBtn = `<button class="task-kill-btn" data-task="${esc(t.task_id)}" data-status="${esc(t.status)}" title="remove this task" aria-label="remove">×</button>`;
+      return `<div class="task-row" data-task="${esc(t.task_id)}">
+        <div class="task-row-head">
+          <span class="task-pill sev-${sev}">${esc(t.status)}</span>
+          <span class="task-id">${esc(t.task_id)}</span>
+          <span class="task-age">${esc(age)}</span>
+          ${deleteBtn}
+        </div>
+        <div class="task-desc">${desc}</div>
+      </div>`;
+    }).join('');
+    wrap.innerHTML = html;
+    wrap.querySelectorAll('.task-kill-btn').forEach(btn =>
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const tid = btn.dataset.task;
+        const status = btn.dataset.status;
+        const msg = (status === 'running')
+          ? `Task ${tid} is still running. Kill it and remove?`
+          : `Remove task ${tid}?`;
+        if (!confirm(msg)) return;
+        btn.disabled = true;
+        try {
+          const r = await fetch(`/api/task/${encodeURIComponent(tid)}`, { method: 'DELETE' });
+          const data = await r.json();
+          if (!r.ok || data.error) { toast(data.error || 'remove failed', 'err'); return; }
+          toast(data.was_running ? `killed + removed ${tid}` : `removed ${tid}`, 'ok');
+        } catch (e) {
+          toast(`remove failed: ${e.message || e}`, 'err');
+        } finally {
+          refreshSubmitTasks();
+        }
+      }));
+  } catch (e) {
+    wrap.innerHTML = `<p class="empty-prose"><em>failed to load: ${esc(e.message || e)}</em></p>`;
+  }
+}
+
+function relTime(ts) {
+  const sec = Math.max(0, Math.floor(Date.now()/1000 - ts));
+  if (sec < 60)     return `${sec}s ago`;
+  if (sec < 3600)   return `${Math.floor(sec/60)}m ago`;
+  if (sec < 86400)  return `${Math.floor(sec/3600)}h ago`;
+  return `${Math.floor(sec/86400)}d ago`;
 }
 
 /* ════════════════════════════ go ════════════════════════════ */

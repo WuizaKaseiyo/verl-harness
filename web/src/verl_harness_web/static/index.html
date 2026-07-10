@@ -67,10 +67,11 @@
 
 <!-- ─────────────────── TABS ─────────────────── -->
 <nav class="tabs" aria-label="View switcher">
-  <button class="tab" data-view="spec"><span class="tab-num">i.</span> task</button>
-  <button class="tab" data-view="metrics"><span class="tab-num">ii.</span> progress</button>
-  <button class="tab" data-view="map"><span class="tab-num">iii.</span> workflow</button>
-  <button class="tab" data-view="stream"><span class="tab-num">iv.</span> terminal</button>
+  <button class="tab" data-view="submit"><span class="tab-num">i.</span> submit</button>
+  <button class="tab" data-view="spec"><span class="tab-num">ii.</span> task</button>
+  <button class="tab" data-view="metrics"><span class="tab-num">iii.</span> progress</button>
+  <button class="tab" data-view="map"><span class="tab-num">iv.</span> workflow</button>
+  <button class="tab" data-view="stream"><span class="tab-num">v.</span> terminal</button>
   <span class="tabs-spacer"></span>
   <span class="tabs-meta" id="tabs-meta"><em>—</em></span>
 </nav>
@@ -127,6 +128,102 @@
       <button class="quiet-btn" id="zoom-in">+</button>
     </div>
     <div class="map-wrap"><div id="graph"></div></div>
+  </article>
+
+  <!-- view: SUBMIT — task-launch form -->
+  <article class="view submit-view" data-view="submit" hidden>
+    <div class="submit-grid">
+      <form class="submit-form" id="submit-form">
+        <h2 class="submit-title"><em>new</em> task</h2>
+        <p class="submit-lede">Fill the fields; the harness will drive the FSM from <code>intake</code> to <code>finalize</code>.</p>
+
+        <label class="submit-field">
+          <span class="field-label">algorithm <span class="field-hint">free text; suggestions from verl's <code>examples/*_trainer/</code></span></span>
+          <input type="text" name="algorithm" id="f-algo"
+                 value="grpo" required list="algo-hints" autocomplete="off"
+                 placeholder="grpo">
+          <datalist id="algo-hints">
+            <option value="grpo" label="verl · GRPO">
+            <option value="ppo" label="verl · PPO">
+            <option value="sft" label="verl · SFT">
+            <option value="gspo" label="verl · GRPO loss-mode variant">
+            <option value="cispo" label="verl · GRPO loss-mode variant">
+            <option value="gmpo" label="verl · GRPO loss-mode variant">
+            <option value="gdpo" label="verl · GRPO loss-mode variant">
+            <option value="dppo" label="verl · GRPO loss-mode variant">
+            <option value="sapo" label="verl · GRPO loss-mode variant">
+            <option value="gpg" label="verl · GPG">
+            <option value="mtp" label="verl · MTP">
+            <option value="on_policy_distillation" label="verl · on-policy distillation">
+            <option value="otb" label="verl · OTB">
+            <option value="reinforce_plus_plus" label="verl · REINFORCE++">
+            <option value="remax" label="verl · ReMax">
+            <option value="rloo" label="verl · RLOO">
+            <option value="distill" label="skill · shorthand for on_policy_distillation">
+            <option value="dpo" label="skill · handled via algo_dpo (not first-class in verl)">
+            <option value="rm" label="skill · handled via algo_rm (not first-class in verl)">
+          </datalist>
+        </label>
+
+        <label class="submit-field">
+          <span class="field-label">model</span>
+          <input type="text" name="model" id="f-model"
+                 value="Qwen/Qwen2.5-3B-Instruct" required
+                 placeholder="Qwen/Qwen2.5-3B-Instruct">
+        </label>
+
+        <label class="submit-field">
+          <span class="field-label">dataset</span>
+          <input type="text" name="dataset" id="f-dataset"
+                 value="gsm8k" required list="dataset-hints"
+                 placeholder="gsm8k">
+          <datalist id="dataset-hints">
+            <option value="gsm8k">
+            <option value="math">
+            <option value="MATH-lighteval">
+            <option value="hh_rlhf">
+            <option value="dpo">
+            <option value="geometry3k">
+          </datalist>
+        </label>
+
+        <label class="submit-field">
+          <span class="field-label">extra notes <span class="field-hint">optional</span></span>
+          <textarea name="extra" id="f-extra" rows="3"
+                    placeholder="Anything else the agent should know — reward shaping, batch size hints, output_dir…"></textarea>
+        </label>
+
+        <label class="submit-field submit-toggle">
+          <input type="checkbox" name="hitl" id="f-hitl">
+          <span class="field-label">HITL <span class="field-hint">off = semi-autonomous (--no-hitl); always-on gates still apply</span></span>
+        </label>
+
+        <div class="submit-actions">
+          <button type="submit" class="submit-btn" id="submit-btn">launch</button>
+          <span class="submit-status" id="submit-status"></span>
+        </div>
+
+        <details class="submit-preview">
+          <summary>preview composed prompt</summary>
+          <pre id="submit-preview-body"></pre>
+        </details>
+      </form>
+
+      <section class="submit-side">
+        <header class="submit-side-head">
+          <h3>recent tasks</h3>
+          <button class="quiet-btn" id="tasks-refresh">refresh</button>
+        </header>
+        <div class="submit-tasks" id="submit-tasks">
+          <p class="empty-prose"><em>no tasks yet</em></p>
+        </div>
+        <p class="submit-side-hint">
+          Live output goes to <code>/tmp/verl-harness-web-tasks/&lt;task_id&gt;/stdout.log</code>
+          as newline-delimited JSON. Once the harness creates a <code>runs/&lt;run_id&gt;/</code>,
+          pick it in the run selector and use <em>progress</em> / <em>workflow</em> tabs.
+        </p>
+      </section>
+    </div>
   </article>
 
   <!-- view: SPEC -->
