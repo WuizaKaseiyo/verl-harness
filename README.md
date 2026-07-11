@@ -126,9 +126,12 @@ is no runner in this repo. Tested with [Claude Code](https://claude.com/claude-c
 uv run --project web verl-harness-web .
 ```
 
-Opens `http://127.0.0.1:8766`. Four tabs — **task**, **progress**,
-**workflow**, **terminal** — cover:
+Opens `http://127.0.0.1:8766`. Five tabs — **submit**, **task**,
+**progress**, **workflow**, **terminal** — cover:
 
+- **submit** — form-driven task launch with algorithm / model / dataset
+  fields plus a recent-tasks panel; the backend spawns the agent in the
+  background and drives the FSM autonomously.
 - **task** — three collapsible groups (overview / states / skills) with
   inline Markdown rendering and edit-in-place for `task-overview.md`,
   every `states/*.md`, and every `skills/**/*.md`.
