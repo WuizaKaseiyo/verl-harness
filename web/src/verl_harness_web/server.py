@@ -26,6 +26,8 @@ from .parser import (parse_harness, parse_state_log, read_anomalies,
                      read_summary)
 from .render import (OVERVIEW_NODE, compile_overview, compile_skill_folder,
                      compile_state, harness_to_mermaid)
+from .submit import (adopt_orphan_supervisors, delete_task, list_tasks,
+                     read_task, submit_task)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -62,6 +64,13 @@ def _is_editable(rel: str) -> bool:
 
 def create_app(harness_root: Path, live: bool = True) -> Starlette:
     harness_root = harness_root.resolve()
+
+    # Adopt any tasks whose supervisor died with a prior server, so the
+    # ScheduleWakeup / auto-resume loop can pick up where it left off.
+    adopted = adopt_orphan_supervisors(harness_root)
+    if adopted:
+        print(f"verl-harness-web: adopted {len(adopted)} orphan supervisor(s): "
+              f"{', '.join(adopted)}")
 
     def _safe(rel: str) -> Path:
         p = (harness_root / rel).resolve()
@@ -245,6 +254,35 @@ def create_app(harness_root: Path, live: bool = True) -> Starlette:
             return JSONResponse({"present": False})
         return JSONResponse(read_reflect_state(run))
 
+    # ---------- task submission --------------------------------------------
+    async def api_submit(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        result = submit_task(harness_root, body)
+        if "error" in result:
+            return JSONResponse(result, status_code=400)
+        return JSONResponse(result)
+
+    async def api_task(request: Request):
+        tid = request.path_params["task_id"]
+        tail = int(request.query_params.get("tail", "200"))
+        result = read_task(tid, tail=tail)
+        if "error" in result:
+            return JSONResponse(result, status_code=404)
+        return JSONResponse(result)
+
+    async def api_tasks(_: Request):
+        return JSONResponse({"tasks": list_tasks()})
+
+    async def api_task_delete(request: Request):
+        tid = request.path_params["task_id"]
+        result = delete_task(tid)
+        if "error" in result:
+            return JSONResponse(result, status_code=404)
+        return JSONResponse(result)
+
     # ---------- SSE live stream --------------------------------------------
     async def events(_: Request):
         async def stream():
@@ -280,6 +318,10 @@ def create_app(harness_root: Path, live: bool = True) -> Starlette:
         Route("/api/logs", api_logs),
         Route("/api/summary", api_summary),
         Route("/api/reflect", api_reflect),
+        Route("/api/submit", api_submit, methods=["POST"]),
+        Route("/api/tasks", api_tasks),
+        Route("/api/task/{task_id}", api_task),
+        Route("/api/task/{task_id}", api_task_delete, methods=["DELETE"]),
         Route("/events", events),
         Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"),
     ]
