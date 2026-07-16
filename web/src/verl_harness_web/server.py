@@ -6,10 +6,12 @@ Two layers of endpoints:
   /api/state/{name}, /api/skill, /api/file
 - verl-specific run endpoints: /api/progress, /api/anomalies, /api/job,
   /api/logs, /api/summary
+- HITL approval channel: /api/hitl/pending, /api/hitl/{request_id}
 """
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -283,6 +285,68 @@ def create_app(harness_root: Path, live: bool = True) -> Starlette:
             return JSONResponse(result, status_code=404)
         return JSONResponse(result)
 
+    # ---------- HITL approval channel --------------------------------------
+    # Pairs with harness/src/harness/hitl.py::EventPrompter.
+    # Runtime writes workspace/hitl/requests/<uuid>.json and polls
+    # workspace/hitl/decisions/<uuid>.json. Dashboard POSTs a decision and
+    # the runtime unblocks. Both endpoints resolve `run_id` via _resolve_run
+    # so ?run_id=<name> targets a specific run; otherwise the latest.
+    _VALID_DECISIONS = ("approve", "deny", "skip")
+
+    async def api_hitl_pending(request: Request):
+        h = parse_harness(harness_root)
+        run = _resolve_run(h, request)
+        if run is None:
+            return JSONResponse({"run_id": None, "requests": []})
+        reqs_dir = run / "workspace" / "hitl" / "requests"
+        if not reqs_dir.is_dir():
+            return JSONResponse({"run_id": run.name, "requests": []})
+        requests: list[dict] = []
+        for p in sorted(reqs_dir.glob("*.json")):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            requests.append(data)
+        requests.sort(key=lambda r: r.get("created_ts", 0.0))
+        return JSONResponse({"run_id": run.name, "requests": requests})
+
+    async def api_hitl_decide(request: Request):
+        request_id = request.path_params["request_id"]
+        if not request_id or "/" in request_id or "\\" in request_id or ".." in request_id:
+            return JSONResponse({"error": "bad request_id"}, status_code=400)
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        decision = body.get("decision")
+        if decision not in _VALID_DECISIONS:
+            return JSONResponse(
+                {"error": f"decision must be one of {_VALID_DECISIONS}, got {decision!r}"},
+                status_code=400,
+            )
+
+        h = parse_harness(harness_root)
+        run = _resolve_run(h, request)
+        if run is None:
+            return JSONResponse({"error": "no runs found"}, status_code=404)
+
+        req_path = run / "workspace" / "hitl" / "requests" / f"{request_id}.json"
+        if not req_path.exists():
+            return JSONResponse(
+                {"error": f"no pending request for id {request_id}"},
+                status_code=404,
+            )
+        dec_dir = run / "workspace" / "hitl" / "decisions"
+        dec_dir.mkdir(parents=True, exist_ok=True)
+        (dec_dir / f"{request_id}.json").write_text(
+            json.dumps({"decision": decision}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return JSONResponse(
+            {"ok": True, "run_id": run.name, "request_id": request_id, "decision": decision}
+        )
+
     # ---------- SSE live stream --------------------------------------------
     async def events(_: Request):
         async def stream():
@@ -322,6 +386,8 @@ def create_app(harness_root: Path, live: bool = True) -> Starlette:
         Route("/api/tasks", api_tasks),
         Route("/api/task/{task_id}", api_task),
         Route("/api/task/{task_id}", api_task_delete, methods=["DELETE"]),
+        Route("/api/hitl/pending", api_hitl_pending),
+        Route("/api/hitl/{request_id}", api_hitl_decide, methods=["POST"]),
         Route("/events", events),
         Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"),
     ]

@@ -72,9 +72,23 @@
   <button class="tab" data-view="metrics"><span class="tab-num">iii.</span> progress</button>
   <button class="tab" data-view="map"><span class="tab-num">iv.</span> workflow</button>
   <button class="tab" data-view="stream"><span class="tab-num">v.</span> terminal</button>
+  <button class="tab" data-view="hitl">
+    <span class="tab-num">vi.</span> approvals
+    <span class="tab-badge" id="hitl-badge" hidden>0</span>
+  </button>
   <span class="tabs-spacer"></span>
   <span class="tabs-meta" id="tabs-meta"><em>—</em></span>
 </nav>
+
+<!-- ─────────────────── HITL BANNER ─────────────────── -->
+<!-- Shown on every view while `/api/hitl/pending` returns >0 requests. -->
+<div class="hitl-banner" id="hitl-banner" hidden role="alert">
+  <span class="hitl-banner-mark">⚠</span>
+  <span class="hitl-banner-text">
+    <strong id="hitl-banner-count">0</strong> pending approval<span id="hitl-banner-plural">s</span>
+  </span>
+  <button class="hitl-banner-cta" id="hitl-banner-cta" type="button">review →</button>
+</div>
 
 <!-- ─────────────────── READER ─────────────────── -->
 <main class="reader">
@@ -223,6 +237,17 @@
           pick it in the run selector and use <em>progress</em> / <em>workflow</em> tabs.
         </p>
       </section>
+    </div>
+  </article>
+
+  <!-- view: HITL — pending hand-off approvals for the current run -->
+  <article class="view hitl-view" data-view="hitl" hidden>
+    <header class="hitl-head">
+      <h2 class="hitl-title"><em>pending</em> approvals</h2>
+      <p class="hitl-lede">Each card is a hand-off point the runtime is waiting on. Approving lets the state finish; denying blocks the transition; skipping is treated as a no-op for ordinary points.</p>
+    </header>
+    <div class="hitl-cards" id="hitl-cards">
+      <p class="empty-prose"><em>no requests — nothing waiting on you</em></p>
     </div>
   </article>
 

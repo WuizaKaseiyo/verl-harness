@@ -1224,8 +1224,149 @@ body[data-state="preempted"] .signal-dot { background: var(--warning); }
   cursor: not-allowed; opacity: 0.5;
 }
 
+/* ── HITL banner + Approvals tab ─────────────────────────────────────── */
+.tab-badge {
+  display: inline-block;
+  min-width: 18px; padding: 0 6px;
+  margin-left: 4px;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  text-align: center;
+  border-radius: var(--r-pill);
+  vertical-align: 1px;
+}
+
+.hitl-banner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 22px;
+  background: var(--primary);
+  color: var(--on-primary);
+  border-bottom: 1px solid var(--primary-active);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  animation: hitl-banner-pulse 2s ease-in-out infinite;
+}
+.hitl-banner-mark { font-size: 16px; line-height: 1; }
+.hitl-banner-text { flex: 1; }
+.hitl-banner-text strong { font-weight: 600; }
+.hitl-banner-cta {
+  padding: 4px 12px;
+  background: var(--on-primary);
+  color: var(--primary-active);
+  border: none;
+  border-radius: var(--r-pill);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.hitl-banner-cta:hover { background: var(--surface-soft); }
+@keyframes hitl-banner-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 0 rgba(0, 0, 0, 0); }
+  50%      { box-shadow: inset 0 -2px 0 0 rgba(0, 0, 0, 0.12); }
+}
+
+.hitl-view { padding: 24px 32px; }
+.hitl-head { margin-bottom: 24px; }
+.hitl-title {
+  font-family: var(--font-serif);
+  font-size: 36px; font-weight: 400;
+  color: var(--ink);
+  margin: 0 0 8px 0;
+}
+.hitl-title em { color: var(--primary); font-style: italic; }
+.hitl-lede {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--muted);
+  max-width: 640px;
+  margin: 0;
+}
+.hitl-cards {
+  display: flex; flex-direction: column;
+  gap: 16px;
+  max-width: 720px;
+}
+.hitl-card {
+  background: var(--surface-soft);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--primary);
+  border-radius: 4px;
+  padding: 16px 20px;
+}
+.hitl-card.always-on {
+  border-left-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 6%, var(--surface-soft));
+}
+.hitl-card-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 8px;
+}
+.hitl-card-state {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.hitl-card-tag {
+  padding: 2px 8px;
+  background: var(--warning);
+  color: var(--ink);
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.hitl-card-title {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--body-strong);
+  margin: 0 0 8px 0;
+}
+.hitl-card-desc {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--body);
+  line-height: 1.5;
+  margin: 0 0 14px 0;
+  white-space: pre-wrap;
+}
+.hitl-card-actions { display: flex; gap: 8px; }
+.hitl-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--hairline);
+  background: var(--canvas);
+  color: var(--body);
+  border-radius: var(--r-pill);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.hitl-btn:hover { background: var(--surface-soft); }
+.hitl-btn.primary {
+  background: var(--primary);
+  color: var(--on-primary);
+  border-color: var(--primary);
+}
+.hitl-btn.primary:hover { background: var(--primary-active); border-color: var(--primary-active); }
+.hitl-btn.deny:hover {
+  background: var(--error);
+  color: var(--on-primary);
+  border-color: var(--error);
+}
+.hitl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* ── Print (rare; cream survives, ink darkens) ────────────────────────── */
 @media print {
   body { background: white; color: black; }
-  .masthead, .tabs, .marginalia, .toast { display: none; }
+  .masthead, .tabs, .marginalia, .toast, .hitl-banner { display: none; }
 }

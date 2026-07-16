@@ -135,6 +135,9 @@ async function boot() {
   $$('.tab[data-view]').forEach(btn =>
     on(btn, 'click', () => setView(btn.dataset.view)));
 
+  // Banner CTA jumps to the Approvals tab
+  on($('#hitl-banner-cta'), 'click', () => setView('hitl'));
+
   on($('#edit-btn'),  'click', openEditor);
   on($('#save-btn'),  'click', saveEdit);
   on($('#cancel-btn'),'click', () => { exitEditor(); reselect(); });
@@ -319,6 +322,7 @@ function setView(name) {
   if (name === 'spec')    selectOverview();
   if (name === 'metrics') refreshMetrics();
   if (name === 'submit')  initSubmit();
+  if (name === 'hitl')    refreshHitl();
   // Auto-refresh task list only while on submit view; clear otherwise.
   clearInterval(S.submitTasksTimer);
   S.submitTasksTimer = null;
@@ -1032,10 +1036,92 @@ async function refreshAll() {
   paintBanner();
   await refreshJob();
   await refreshStream();
+  await refreshHitl();
   if (S.view === 'metrics') await refreshMetrics();
   if (S.view === 'map')     await renderGraph();
   if (S.view === 'spec')    renderSpecNav();
   if (S.view === 'submit')  await refreshSubmitTasks();
+}
+
+/* ════════════════════════════ HITL — approvals ════════════════════════════ */
+async function refreshHitl() {
+  let requests = [];
+  try {
+    const data = await getJSON(scoped('/api/hitl/pending'));
+    requests = Array.isArray(data.requests) ? data.requests : [];
+  } catch (_) {
+    // Endpoint may briefly 5xx during server reload; silent retry next tick.
+    return;
+  }
+  paintHitlBanner(requests.length);
+  paintHitlBadge(requests.length);
+  if (S.view === 'hitl') renderHitlCards(requests);
+}
+
+function paintHitlBanner(count) {
+  const banner = $('#hitl-banner');
+  if (!banner) return;
+  banner.hidden = count === 0;
+  const c = $('#hitl-banner-count'); if (c) c.textContent = String(count);
+  const p = $('#hitl-banner-plural'); if (p) p.textContent = count === 1 ? '' : 's';
+}
+function paintHitlBadge(count) {
+  const b = $('#hitl-badge');
+  if (!b) return;
+  b.hidden = count === 0;
+  b.textContent = String(count);
+}
+function renderHitlCards(requests) {
+  const host = $('#hitl-cards');
+  if (!host) return;
+  if (!requests.length) {
+    host.innerHTML = `<p class="empty-prose"><em>no requests — nothing waiting on you</em></p>`;
+    return;
+  }
+  host.innerHTML = requests.map(r => {
+    const cls = r.is_always_on ? 'hitl-card always-on' : 'hitl-card';
+    const tag = r.is_always_on ? `<span class="hitl-card-tag">always-on</span>` : '';
+    return `
+      <article class="${cls}" data-req-id="${esc(r.id)}">
+        <div class="hitl-card-head">
+          <span class="hitl-card-state">${esc(r.state || '')}</span>
+          ${tag}
+        </div>
+        <h3 class="hitl-card-title">${esc(r.title || '')}</h3>
+        <p class="hitl-card-desc">${esc(r.description || '')}</p>
+        <div class="hitl-card-actions">
+          <button class="hitl-btn primary" data-decision="approve">Approve</button>
+          <button class="hitl-btn deny"    data-decision="deny">Deny</button>
+          <button class="hitl-btn"         data-decision="skip">Skip</button>
+        </div>
+      </article>`;
+  }).join('');
+  host.querySelectorAll('.hitl-btn[data-decision]').forEach(btn => {
+    btn.addEventListener('click', onHitlDecision);
+  });
+}
+async function onHitlDecision(ev) {
+  const btn = ev.currentTarget;
+  const decision = btn.dataset.decision;
+  const card = btn.closest('.hitl-card');
+  const reqId = card?.dataset.reqId;
+  if (!reqId) return;
+  card.querySelectorAll('.hitl-btn').forEach(b => { b.disabled = true; });
+  try {
+    const r = await fetch(scoped(`/api/hitl/${encodeURIComponent(reqId)}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `${r.status}`);
+    toast(`${decision} · ${reqId.slice(0, 8)}…`);
+    // Card will vanish on next refresh; trigger immediately.
+    await refreshHitl();
+  } catch (e) {
+    toast(`error: ${e.message}`);
+    card.querySelectorAll('.hitl-btn').forEach(b => { b.disabled = false; });
+  }
 }
 
 /* ════════════════════════════ SUBMIT ════════════════════════════ */
