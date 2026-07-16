@@ -34,6 +34,8 @@ Concretely:
    - **GPU budget**: model size, algorithm, per-GPU VRAM, `gpu_mem_util`, `N_min`, `N_rec` (= chosen `gpus_per_node`), `tensor_model_parallel_size`, and the per-GPU estimate — so `launch_training` can reuse it for the cost gate and the user can audit the sizing.
    - For slurm targets, the populated sbatch directives ready to splice into `<VERL_ROOT>/examples/tutorial/slurm/ray_on_slurm.slurm` (or a fresh slurm template the harness writes — see `compute_slurm` skill).
 
+8. **Transition immediately.** Once `compute_choice.md` is on disk with the fields above (and, for slurm targets, the sbatch directives populated), call `transition_to("provision_env", ...)` in the next turn. Do **not** re-open the file to verify it, do **not** grep the sbatch fields back out, do **not** re-check the transition condition — the FSM validator and the next state's precondition read are the audit surface, not you. Extra self-verification turns burn `max_iterations` for no signal gain.
+
 ## Skills
 
 - skills/compute_select

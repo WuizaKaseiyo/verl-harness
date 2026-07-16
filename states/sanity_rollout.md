@@ -37,6 +37,8 @@ Concretely:
 
    **Fail condition baked into the template:** `non_zero_rate < 0.05` over 10 rows → verdict=`fail`. Reward fn is too strict (or wrong); training signal is noise.
 
+   **Do NOT substitute ground-truth responses or hand-crafted responses for real model rollouts.** The whole point of this state is to catch the *launch-env / tokenizer / model / reward interaction* — the exact stack `launch_training` will use. Feeding the dataset's `extra_info.answer` (or any pre-computed response) into the reward function proves only that the reward function isn't syntactically broken; it proves nothing about whether training will actually run. If `import vllm`, `LLM(...)` construction, tokenizer load, or the first `llm.generate()` raises, that is a **hard fail** of this state — see step 7. **Do not** author a substitute probe script that skips the vLLM load with a "note" and marks green.
+
 5. **Verify** the JSON report and extract the values to copy into `sanity_report.md`. Record:
    - Reward histogram (min / p50 / max).
    - Non-zero rate. **Fail this state if the non-zero rate < 5%** — the reward fn is too strict (or wrong); training will be all-noise.
@@ -51,7 +53,19 @@ Concretely:
 
    **Always-on**: this pause is not skipped by `--no-hitl`. Rationale: this is the only place before the cost-gate where a wrong reward fn can be caught for a few seconds of compute instead of hundreds of GPU-hours. Same family of always-on hand-offs as `generate_preprocess` step 6 and `configure_reward` for custom/shaped (see `skills/global/scientific_principles.md`).
 
-7. **Write `workspace/sanity/sanity_report.md`** with the row-0 trace, the 10-row distribution, GPU-memory peak, and a verdict line (`green` | `warn` | `fail`). On `fail` (non-zero rate < 5%, OOM, or import error), short-circuit to `finalize` with `sanity_failed`.
+7. **Write `workspace/sanity/sanity_report.md`** with the row-0 trace, the 10-row distribution, GPU-memory peak, and a verdict line (`green` | `warn` | `fail`).
+
+   **Verdict is `fail` when any of these hold** (do not improvise a green with a note):
+   - vLLM (or the transformers fallback) fails to import.
+   - `LLM(...)` construction raises — CUDA visible-device mismatch, TP factor rejected, model weights unreadable.
+   - The first `llm.generate()` raises or times out beyond 10× the recipe's per-call expectation.
+   - Tokenizer chat-template mismatch surfaces during response formatting.
+   - Non-zero reward rate < 5% over the 10-row sample.
+   - OOM at model load; GPU peak ≥ 0.98 × configured device memory.
+   - The reward fn raises an exception on a valid response.
+   - The dataset's `ground_truth` (or equivalent) column is absent or empty on ≥ 5/10 sampled rows.
+
+   On `fail`, short-circuit to `finalize` with a `sanity_failed` deliverable naming the specific failure. **Do not** attempt to substitute pre-computed responses, ground-truth answers, or a smaller model to force the probe to complete — that hides the very bug this state exists to catch. The launch environment must be able to actually run one rollout, or the run is doomed.
 
 ## Skills
 
@@ -75,7 +89,7 @@ Concretely:
 
 ### launch_training
 
-**Condition:** `workspace/sanity/sanity_report.md` records verdict `green` or `warn` (with user acceptance of the warnings). The reward fn returned non-zero on at least 5% of the 10-row sample. No OOM at model load.
+**Condition:** `workspace/sanity/sanity_report.md` records verdict `green` or `warn` (with user acceptance of the warnings). Additionally: the actor model was actually loaded through vLLM (or the documented transformers fallback) and at least one real rollout was sampled and scored — a report whose row-level `response` field is copied from the dataset's ground truth (rather than emitted by the actor) is **not** eligible for this transition and must be treated as `fail`. The reward fn returned non-zero on at least 5% of the 10-row sample. No OOM at model load.
 
 **Deliverables:**
 
