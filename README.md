@@ -126,8 +126,8 @@ is no runner in this repo. Tested with [Claude Code](https://claude.com/claude-c
 uv run --project web verl-harness-web .
 ```
 
-Opens `http://127.0.0.1:8766`. Five tabs — **submit**, **task**,
-**progress**, **workflow**, **terminal** — cover:
+Opens `http://127.0.0.1:8766`. Six tabs — **submit**, **task**,
+**progress**, **workflow**, **terminal**, **approvals** — cover:
 
 - **submit** — form-driven task launch with algorithm / model / dataset
   fields plus a recent-tasks panel; the backend spawns the agent in the
@@ -143,6 +143,10 @@ Opens `http://127.0.0.1:8766`. Five tabs — **submit**, **task**,
 - **workflow** — the FSM diagram at three zoom levels (phases · 5 /
   stages · 14 / all · 16).
 - **terminal** — raw job-log tail (debug-only).
+- **approvals** — one card per pending hand-off point (state / title /
+  description / always-on flag) with Approve / Deny / Skip buttons.
+  Activates when the runtime is launched with `--hitl-channel event`
+  (default is still stdio); a top banner flags pending count on every tab.
 
 See `web/README.md`.
 
