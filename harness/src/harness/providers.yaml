@@ -1,0 +1,52 @@
+# Built-in provider profiles. Users can override / extend via
+# ~/.verl-harness/providers.yaml (deep-merged on top of these defaults).
+#
+# wire: "anthropic" | "openai"  — which native message/tool format the backend uses.
+# api_key_env: null means the endpoint requires no key (e.g. local vLLM).
+
+version: 1
+
+providers:
+
+  # ── Anthropic native ─────────────────────────────────────────────
+  anthropic:
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    wire: anthropic
+
+  # ── OpenAI-compatible endpoints ──────────────────────────────────
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    wire: openai
+
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    wire: openai
+
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+    wire: openai
+
+  qwen:
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: DASHSCOPE_API_KEY
+    wire: openai
+
+  together:
+    base_url: https://api.together.xyz/v1
+    api_key_env: TOGETHER_API_KEY
+    wire: openai
+
+  groq:
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
+    wire: openai
+
+  # ── Local ────────────────────────────────────────────────────────
+  vllm:
+    base_url: http://127.0.0.1:8000/v1
+    api_key_env: null
+    wire: openai
