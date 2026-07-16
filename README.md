@@ -8,10 +8,10 @@ report.
 ![verl-harness — four-layer architecture: FSM workflow, reusable skills, versioned workspace contract, event-driven monitoring](docs/pipeline.png)
 
 Every state under `states/` and every skill under `skills/` is an
-instruction file the runtime reads and executes. Two runtimes work:
-the in-tree `harness/` (ships with 8 built-in LLM backends), or any
-external agent runner (Claude Code, etc.) pointed at this directory.
-Training itself is still verl.
+instruction file the harness runtime reads and executes. `harness/` is
+the self-contained runtime — a multi-backend LLM driver with a tool
+loop and workspace-contract enforcement — that owns the FSM
+end-to-end. Training itself is verl.
 
 `states/*.md` is the single source of truth for control flow. Validate the
 state graph and its terminal contracts after every spec change:
@@ -52,7 +52,7 @@ goals included) and `CLAUDE.md` for editing conventions.
 ```
 verl-harness/
 ├── task-overview.md
-├── CLAUDE.md               — repo guidance for Claude Code (and other agents)
+├── CLAUDE.md               — editing conventions for anyone (human or agent) modifying the specs
 ├── states/
 │   ├── intake.md                    — dispatches on `goal`: train / resume_monitor / resume_train / generate / eval
 │   ├── locate_recipe.md
@@ -131,21 +131,6 @@ Any OpenAI-compatible endpoint works with a 3-line entry in
 always-on gates stay honored; see
 `skills/global/scientific_principles.md`.
 
-## External runners
-
-Any capable agent runner can drive the same specs. Minimal prompt:
-
-```
-You are driving the verl-harness FSM at /path/to/verl-harness.
-Read CLAUDE.md, task-overview.md, and states/intake.md, then apply intake.
-Walk transitions per each state's `## Next States` block.
-Honor every `## Hand-off Points` block.
-
-Intent: <one sentence>.
-verl checkout: <absolute path or $VERL_HOME>.
-HITL: on   (or --no-hitl).
-```
-
 ## Dashboard
 
 ```bash
@@ -185,4 +170,4 @@ See `web/README.md`.
 
 ## License
 
-Apache 2.0 (matches verl).
+Apache 2.0.
