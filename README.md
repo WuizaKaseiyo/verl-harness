@@ -5,11 +5,13 @@ A markdown-driven agent harness that walks an LLM through a full
 GRPO on gsm8k with Qwen3-4B" to a trained checkpoint and a structured
 report.
 
+![verl-harness — four-layer architecture: FSM workflow, reusable skills, versioned workspace contract, event-driven monitoring](docs/pipeline.png)
+
 Every state under `states/` and every skill under `skills/` is an
-instruction file the agent reads and executes. The agent is the FSM runtime;
-the Python under `tools/` provides fallback capabilities and contract
-validation, while `web/` provides the dashboard. There is no in-tree training
-runner.
+instruction file the runtime reads and executes. Two runtimes work:
+the in-tree `harness/` (ships with 8 built-in LLM backends), or any
+external agent runner (Claude Code, etc.) pointed at this directory.
+Training itself is still verl.
 
 `states/*.md` is the single source of truth for control flow. Validate the
 state graph and its terminal contracts after every spec change:
@@ -93,13 +95,45 @@ verl-harness/
 │   ├── run_eval/           — main_eval CLI + reward fn integration
 │   ├── builtin-tools/      — filesystem / shell / web tools used by every state
 │   └── global/             — honesty principle, scope discipline, state-log contract
+├── harness/                — first-party runtime: multi-backend LLM driver + tool loop + FSM contract enforcement
+├── tools/                  — FSM validator (`validate_harness.py`) and small fallback utilities
 ├── runs/                   — per-execution workspace dirs (gitignored)
 └── web/                    — sibling Python package: `verl-harness-web` live dashboard
 ```
 
-## Drive it
+## Runtime
 
-Point an agent runner at this directory. Minimal prompt:
+```bash
+uv run --project harness verl-harness-runtime . \
+  --intent "GRPO on gsm8k with Qwen3-4B" \
+  --provider anthropic --model claude-sonnet-5 \
+  --hitl-channel event      # or `stdio` (default, tty)
+```
+
+Built-in provider profiles (`harness/src/harness/providers.yaml`):
+
+| provider           | wire       | key env                |
+|--------------------|------------|------------------------|
+| **anthropic**      | anthropic  | `ANTHROPIC_API_KEY`    |
+| **openai**         | openai     | `OPENAI_API_KEY`       |
+| **openrouter**     | openai     | `OPENROUTER_API_KEY`   |
+| **deepseek**       | openai     | `DEEPSEEK_API_KEY`     |
+| **qwen** (dashscope) | openai   | `DASHSCOPE_API_KEY`    |
+| **together**       | openai     | `TOGETHER_API_KEY`     |
+| **groq**           | openai     | `GROQ_API_KEY`         |
+| **vllm** (local)   | openai     | —                      |
+
+Any OpenAI-compatible endpoint works with a 3-line entry in
+`~/.verl-harness/providers.yaml` (deep-merged over the built-ins).
+
+`--hitl-channel event` feeds the dashboard's **approvals** tab;
+`stdio` is the tty default. `--no-hitl` is semi-autonomous — four
+always-on gates stay honored; see
+`skills/global/scientific_principles.md`.
+
+## External runners
+
+Any capable agent runner can drive the same specs. Minimal prompt:
 
 ```
 You are driving the verl-harness FSM at /path/to/verl-harness.
@@ -111,14 +145,6 @@ Intent: <one sentence>.
 verl checkout: <absolute path or $VERL_HOME>.
 HITL: on   (or --no-hitl).
 ```
-
-`--no-hitl` is semi-autonomous: four hand-off points stay always-on —
-`generate_preprocess` script approval, custom-reward approval,
-`sanity_rollout` approval, and the cost gate when estimated node-hours
-≥ 50. See `skills/global/scientific_principles.md`.
-
-The harness ships the spec; the agent owns the transition logic. There
-is no runner in this repo. Tested with [Claude Code](https://claude.com/claude-code).
 
 ## Dashboard
 
